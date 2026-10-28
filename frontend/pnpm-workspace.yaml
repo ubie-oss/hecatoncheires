@@ -2,9 +2,6 @@
 # (overrides, supply-chain age gate, install behaviour) must live here or it is
 # silently ignored. Keep this file the single home for pnpm configuration.
 
-allowBuilds:
-  esbuild: true
-
 # Dependency version overrides. Migrated from package.json's "pnpm.overrides"
 # field, which pnpm v10 no longer reads. Pins the transitive `yaml` package to a
 # non-vulnerable release.
