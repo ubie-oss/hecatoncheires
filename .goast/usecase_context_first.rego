@@ -90,6 +90,8 @@ exempt_name := {
 	"GetCaseStatusSet",
 	"ReferenceWorkspaceForField",
 	"MemoConfiguration",
+	# reads the workspace entry and whether a Slack service is wired; no I/O
+	"ExistingSlackChannelAllowed",
 	"Resolve",
 	"ResolveJobName",
 	# static catalogs / pure transforms
