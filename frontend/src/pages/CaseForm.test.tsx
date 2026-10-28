@@ -316,12 +316,20 @@ describe('CaseForm Slack channel source', () => {
     expect(screen.getByTestId('private-case-checkbox')).toBeInTheDocument()
   })
 
-  it('fetches candidates once when an existing channel is chosen and shows a loading text', async () => {
-    const counter = { calls: 0 }
-    renderChannelForm([{ ...candidatesMock(counter), delay: 20 }])
+  it('shows a loading text while the candidates are being fetched', async () => {
+    // The response never arrives within the test, so the loading state stays.
+    renderChannelForm([{ ...candidatesMock({ calls: 0 }), delay: 100_000 }])
     fireEvent.click(await screen.findByTestId('case-channel-source-existing'))
     expect(await screen.findByText('Loading channels…')).toBeInTheDocument()
+    expect(screen.queryByRole('combobox', { name: 'Slack channel' })).not.toBeInTheDocument()
+  })
+
+  it('fetches the candidates once when an existing channel is chosen', async () => {
+    const counter = { calls: 0 }
+    renderChannelForm([candidatesMock(counter)])
+    fireEvent.click(await screen.findByTestId('case-channel-source-existing'))
     await screen.findByRole('combobox', { name: 'Slack channel' })
+    await flush()
     expect(counter.calls).toBe(1)
   })
 
