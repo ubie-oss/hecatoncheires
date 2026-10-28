@@ -86,6 +86,20 @@ type SlackChannelCandidate {
   isPrivate: Boolean!
 }
 
+# SlackChannelCandidateList is one search result of the existing-channel
+# picker.
+type SlackChannelCandidateList {
+  # At most 50 matching channels, sorted by name.
+  channels: [SlackChannelCandidate!]!
+  # True when more channels match than `channels` holds; the user narrows the
+  # search to see them.
+  hasMore: Boolean!
+  # When the channel list the search ran on was fetched from Slack. The list
+  # is stored per user and refreshed in the background once it is older than
+  # 10 minutes; pass refresh: true to fetch it now.
+  fetchedAt: Time!
+}
+
 # ActionStatusDefinition describes a single action status configurable per
 # workspace in TOML. `name` is the display label written by the workspace
 # operator in whatever language they prefer. `color` is either a semantic
@@ -823,12 +837,15 @@ type Query {
   # Configuration
   fieldConfiguration(workspaceId: String!): FieldConfiguration!
 
-  # existingSlackChannelCandidates lists the channels the acting user may link
-  # a new case to: channels the user has joined that the bot can see (private
-  # ones only when the bot is a member), excluding channels used by any
-  # workspace configuration and channels already linked to a case. Display
-  # only; createCase validates the chosen channel again.
-  existingSlackChannelCandidates(workspaceId: String!): [SlackChannelCandidate!]!
+  # existingSlackChannelCandidates searches the channels the acting user may
+  # link a new case to: channels the user has joined that the bot can see
+  # (private ones only when the bot is a member), excluding channels used by
+  # any workspace configuration and channels already linked to a case. A
+  # channel matches when its name contains `query` (case-insensitive, a
+  # leading "#" ignored); an empty or absent query matches every channel.
+  # refresh: true fetches the user's channel list from Slack before searching.
+  # Display only; createCase validates the chosen channel again.
+  existingSlackChannelCandidates(workspaceId: String!, query: String, refresh: Boolean = false): SlackChannelCandidateList!
 
   # caseStatusConfig returns the configurable Case status set (the Kanban
   # columns) for a thread-mode workspace, or null for channel-mode workspaces.

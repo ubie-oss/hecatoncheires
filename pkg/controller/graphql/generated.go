@@ -534,7 +534,7 @@ type ComplexityRoot struct {
 		CaseStatusConfig               func(childComplexity int, workspaceID string) int
 		Cases                          func(childComplexity int, workspaceID string, status *types.CaseStatus, filter *graphql1.CaseArchiveFilter) int
 		Drafts                         func(childComplexity int, workspaceID string) int
-		ExistingSlackChannelCandidates func(childComplexity int, workspaceID string) int
+		ExistingSlackChannelCandidates func(childComplexity int, workspaceID string, query *string, refresh *bool) int
 		FavoriteWorkspaceIds           func(childComplexity int) int
 		FieldConfiguration             func(childComplexity int, workspaceID string) int
 		FrequentAssigneeIDs            func(childComplexity int, workspaceID string) int
@@ -573,6 +573,12 @@ type ComplexityRoot struct {
 		ID        func(childComplexity int) int
 		IsPrivate func(childComplexity int) int
 		Name      func(childComplexity int) int
+	}
+
+	SlackChannelCandidateList struct {
+		Channels  func(childComplexity int) int
+		FetchedAt func(childComplexity int) int
+		HasMore   func(childComplexity int) int
 	}
 
 	SlackChannelInfo struct {
@@ -770,7 +776,7 @@ type QueryResolver interface {
 	ActionsByCase(ctx context.Context, workspaceID string, caseID int, filter *graphql1.ActionArchiveFilter) ([]*graphql1.Action, error)
 	OpenCaseActions(ctx context.Context, workspaceID string) ([]*graphql1.Action, error)
 	FieldConfiguration(ctx context.Context, workspaceID string) (*graphql1.FieldConfiguration, error)
-	ExistingSlackChannelCandidates(ctx context.Context, workspaceID string) ([]*graphql1.SlackChannelCandidate, error)
+	ExistingSlackChannelCandidates(ctx context.Context, workspaceID string, query *string, refresh *bool) (*graphql1.SlackChannelCandidateList, error)
 	CaseStatusConfig(ctx context.Context, workspaceID string) (*graphql1.ActionConfig, error)
 	FrequentAssigneeIDs(ctx context.Context, workspaceID string) ([]string, error)
 	SlackUsers(ctx context.Context) ([]*graphql1.SlackUser, error)
@@ -3297,7 +3303,7 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 			return 0, false
 		}
 
-		return e.ComplexityRoot.Query.ExistingSlackChannelCandidates(childComplexity, args["workspaceId"].(string)), true
+		return e.ComplexityRoot.Query.ExistingSlackChannelCandidates(childComplexity, args["workspaceId"].(string), args["query"].(*string), args["refresh"].(*bool)), true
 	case "Query.favoriteWorkspaceIds":
 		if e.ComplexityRoot.Query.FavoriteWorkspaceIds == nil {
 			break
@@ -3588,6 +3594,25 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.SlackChannelCandidate.Name(childComplexity), true
+
+	case "SlackChannelCandidateList.channels":
+		if e.ComplexityRoot.SlackChannelCandidateList.Channels == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SlackChannelCandidateList.Channels(childComplexity), true
+	case "SlackChannelCandidateList.fetchedAt":
+		if e.ComplexityRoot.SlackChannelCandidateList.FetchedAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SlackChannelCandidateList.FetchedAt(childComplexity), true
+	case "SlackChannelCandidateList.hasMore":
+		if e.ComplexityRoot.SlackChannelCandidateList.HasMore == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SlackChannelCandidateList.HasMore(childComplexity), true
 
 	case "SlackChannelInfo.id":
 		if e.ComplexityRoot.SlackChannelInfo.ID == nil {
@@ -4102,6 +4127,20 @@ type SlackChannelCandidate {
   id: String!
   name: String!
   isPrivate: Boolean!
+}
+
+# SlackChannelCandidateList is one search result of the existing-channel
+# picker.
+type SlackChannelCandidateList {
+  # At most 50 matching channels, sorted by name.
+  channels: [SlackChannelCandidate!]!
+  # True when more channels match than ` + "`" + `channels` + "`" + ` holds; the user narrows the
+  # search to see them.
+  hasMore: Boolean!
+  # When the channel list the search ran on was fetched from Slack. The list
+  # is stored per user and refreshed in the background once it is older than
+  # 10 minutes; pass refresh: true to fetch it now.
+  fetchedAt: Time!
 }
 
 # ActionStatusDefinition describes a single action status configurable per
@@ -4841,12 +4880,15 @@ type Query {
   # Configuration
   fieldConfiguration(workspaceId: String!): FieldConfiguration!
 
-  # existingSlackChannelCandidates lists the channels the acting user may link
-  # a new case to: channels the user has joined that the bot can see (private
-  # ones only when the bot is a member), excluding channels used by any
-  # workspace configuration and channels already linked to a case. Display
-  # only; createCase validates the chosen channel again.
-  existingSlackChannelCandidates(workspaceId: String!): [SlackChannelCandidate!]!
+  # existingSlackChannelCandidates searches the channels the acting user may
+  # link a new case to: channels the user has joined that the bot can see
+  # (private ones only when the bot is a member), excluding channels used by
+  # any workspace configuration and channels already linked to a case. A
+  # channel matches when its name contains ` + "`" + `query` + "`" + ` (case-insensitive, a
+  # leading "#" ignored); an empty or absent query matches every channel.
+  # refresh: true fetches the user's channel list from Slack before searching.
+  # Display only; createCase validates the chosen channel again.
+  existingSlackChannelCandidates(workspaceId: String!, query: String, refresh: Boolean = false): SlackChannelCandidateList!
 
   # caseStatusConfig returns the configurable Case status set (the Kanban
   # columns) for a thread-mode workspace, or null for channel-mode workspaces.
@@ -6176,6 +6218,18 @@ func (ec *executionContext) childFields_SlackChannelCandidate(ctx context.Contex
 		return ec.fieldContext_SlackChannelCandidate_isPrivate(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type SlackChannelCandidate", field.Name)
+}
+
+func (ec *executionContext) childFields_SlackChannelCandidateList(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "channels":
+		return ec.fieldContext_SlackChannelCandidateList_channels(ctx, field)
+	case "hasMore":
+		return ec.fieldContext_SlackChannelCandidateList_hasMore(ctx, field)
+	case "fetchedAt":
+		return ec.fieldContext_SlackChannelCandidateList_fetchedAt(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type SlackChannelCandidateList", field.Name)
 }
 
 func (ec *executionContext) childFields_SlackChannelInfo(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -8167,6 +8221,22 @@ func (ec *executionContext) field_Query_existingSlackChannelCandidates_args(ctx 
 		return nil, err
 	}
 	args["workspaceId"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "query",
+		func(ctx context.Context, v any) (*string, error) {
+			return ec.unmarshalOString2ᚖstring(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["query"] = arg1
+	arg2, err := graphql.ProcessArgField(ctx, rawArgs, "refresh",
+		func(ctx context.Context, v any) (*bool, error) {
+			return ec.unmarshalOBoolean2ᚖbool(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["refresh"] = arg2
 	return args, nil
 }
 
@@ -18544,11 +18614,11 @@ func (ec *executionContext) _Query_existingSlackChannelCandidates(ctx context.Co
 		},
 		func(ctx context.Context) (any, error) {
 			fc := graphql.GetFieldContext(ctx)
-			return ec.Resolvers.Query().ExistingSlackChannelCandidates(ctx, fc.Args["workspaceId"].(string))
+			return ec.Resolvers.Query().ExistingSlackChannelCandidates(ctx, fc.Args["workspaceId"].(string), fc.Args["query"].(*string), fc.Args["refresh"].(*bool))
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v []*graphql1.SlackChannelCandidate) graphql.Marshaler {
-			return ec.marshalNSlackChannelCandidate2ᚕᚖgithubᚗcomᚋmᚑmizutaniᚋhecatoncheiresᚋpkgᚋdomainᚋmodelᚋgraphqlᚐSlackChannelCandidateᚄ(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v *graphql1.SlackChannelCandidateList) graphql.Marshaler {
+			return ec.marshalNSlackChannelCandidateList2ᚖgithubᚗcomᚋmᚑmizutaniᚋhecatoncheiresᚋpkgᚋdomainᚋmodelᚋgraphqlᚐSlackChannelCandidateList(ctx, selections, v)
 		},
 		true,
 		true,
@@ -18561,7 +18631,7 @@ func (ec *executionContext) fieldContext_Query_existingSlackChannelCandidates(ct
 		IsMethod:   true,
 		IsResolver: true,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.childFields_SlackChannelCandidate(ctx, field)
+			return ec.childFields_SlackChannelCandidateList(ctx, field)
 		},
 	}
 	defer func() {
@@ -19798,6 +19868,84 @@ func (ec *executionContext) _SlackChannelCandidate_isPrivate(ctx context.Context
 }
 func (ec *executionContext) fieldContext_SlackChannelCandidate_isPrivate(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("SlackChannelCandidate", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _SlackChannelCandidateList_channels(ctx context.Context, field graphql.CollectedField, obj *graphql1.SlackChannelCandidateList) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_SlackChannelCandidateList_channels(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Channels, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*graphql1.SlackChannelCandidate) graphql.Marshaler {
+			return ec.marshalNSlackChannelCandidate2ᚕᚖgithubᚗcomᚋmᚑmizutaniᚋhecatoncheiresᚋpkgᚋdomainᚋmodelᚋgraphqlᚐSlackChannelCandidateᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_SlackChannelCandidateList_channels(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SlackChannelCandidateList",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_SlackChannelCandidate(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _SlackChannelCandidateList_hasMore(ctx context.Context, field graphql.CollectedField, obj *graphql1.SlackChannelCandidateList) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_SlackChannelCandidateList_hasMore(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.HasMore, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_SlackChannelCandidateList_hasMore(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("SlackChannelCandidateList", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _SlackChannelCandidateList_fetchedAt(ctx context.Context, field graphql.CollectedField, obj *graphql1.SlackChannelCandidateList) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_SlackChannelCandidateList_fetchedAt(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.FetchedAt, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v time.Time) graphql.Marshaler {
+			return ec.marshalNTime2timeᚐTime(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_SlackChannelCandidateList_fetchedAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("SlackChannelCandidateList", field, false, false, errors.New("field of type Time does not have child fields"))
 }
 
 func (ec *executionContext) _SlackChannelInfo_id(ctx context.Context, field graphql.CollectedField, obj *graphql1.SlackChannelInfo) (ret graphql.Marshaler) {
@@ -28648,6 +28796,54 @@ func (ec *executionContext) _SlackChannelCandidate(ctx context.Context, sel ast.
 	return out
 }
 
+var slackChannelCandidateListImplementors = []string{"SlackChannelCandidateList"}
+
+func (ec *executionContext) _SlackChannelCandidateList(ctx context.Context, sel ast.SelectionSet, obj *graphql1.SlackChannelCandidateList) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, slackChannelCandidateListImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("SlackChannelCandidateList")
+		case "channels":
+			out.Values[i] = ec._SlackChannelCandidateList_channels(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "hasMore":
+			out.Values[i] = ec._SlackChannelCandidateList_hasMore(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "fetchedAt":
+			out.Values[i] = ec._SlackChannelCandidateList_fetchedAt(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
 var slackChannelInfoImplementors = []string{"SlackChannelInfo"}
 
 func (ec *executionContext) _SlackChannelInfo(ctx context.Context, sel ast.SelectionSet, obj *graphql1.SlackChannelInfo) graphql.Marshaler {
@@ -30884,6 +31080,20 @@ func (ec *executionContext) marshalNSlackChannelCandidate2ᚖgithubᚗcomᚋmᚑ
 		return graphql.Null
 	}
 	return ec._SlackChannelCandidate(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNSlackChannelCandidateList2githubᚗcomᚋmᚑmizutaniᚋhecatoncheiresᚋpkgᚋdomainᚋmodelᚋgraphqlᚐSlackChannelCandidateList(ctx context.Context, sel ast.SelectionSet, v graphql1.SlackChannelCandidateList) graphql.Marshaler {
+	return ec._SlackChannelCandidateList(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNSlackChannelCandidateList2ᚖgithubᚗcomᚋmᚑmizutaniᚋhecatoncheiresᚋpkgᚋdomainᚋmodelᚋgraphqlᚐSlackChannelCandidateList(ctx context.Context, sel ast.SelectionSet, v *graphql1.SlackChannelCandidateList) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._SlackChannelCandidateList(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalNSlackChannelInfo2ᚕᚖgithubᚗcomᚋmᚑmizutaniᚋhecatoncheiresᚋpkgᚋdomainᚋmodelᚋgraphqlᚐSlackChannelInfoᚄ(ctx context.Context, sel ast.SelectionSet, v []*graphql1.SlackChannelInfo) graphql.Marshaler {

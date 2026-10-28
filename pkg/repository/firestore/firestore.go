@@ -36,6 +36,7 @@ type Firestore struct {
 	userPreference  *userPreferenceRepository
 	homeMessage     *homeMessageRepository
 	assigneeRanking *assigneeRankingRepository
+	slackMemberChs  *slackMemberChannelsRepository
 }
 
 var _ interfaces.Repository = &Firestore{}
@@ -83,6 +84,7 @@ func New(ctx context.Context, projectID, databaseID string) (*Firestore, error) 
 		userPreference:  newUserPreferenceRepository(client),
 		homeMessage:     newHomeMessageRepository(client),
 		assigneeRanking: newAssigneeRankingRepository(client),
+		slackMemberChs:  newSlackMemberChannelsRepository(client),
 	}
 
 	return f, nil
@@ -190,6 +192,10 @@ func (f *Firestore) HomeMessage() interfaces.HomeMessageRepository {
 
 func (f *Firestore) AssigneeRanking() interfaces.AssigneeRankingRepository {
 	return f.assigneeRanking
+}
+
+func (f *Firestore) SlackMemberChannels() interfaces.SlackMemberChannelsRepository {
+	return f.slackMemberChs
 }
 
 func (f *Firestore) Close() error {

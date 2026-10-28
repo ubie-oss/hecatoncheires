@@ -35,6 +35,7 @@ type Memory struct {
 	userPreference  *userPreferenceRepository
 	homeMessage     *homeMessageRepository
 	assigneeRanking *assigneeRankingRepository
+	slackMemberChs  *slackMemberChannelsRepository
 }
 
 var _ interfaces.Repository = &Memory{}
@@ -68,6 +69,7 @@ func New() *Memory {
 		userPreference:  newUserPreferenceRepository(),
 		homeMessage:     newHomeMessageRepository(),
 		assigneeRanking: newAssigneeRankingRepository(),
+		slackMemberChs:  newSlackMemberChannelsRepository(),
 	}
 }
 
@@ -173,6 +175,10 @@ func (m *Memory) HomeMessage() interfaces.HomeMessageRepository {
 
 func (m *Memory) AssigneeRanking() interfaces.AssigneeRankingRepository {
 	return m.assigneeRanking
+}
+
+func (m *Memory) SlackMemberChannels() interfaces.SlackMemberChannelsRepository {
+	return m.slackMemberChs
 }
 
 func (m *Memory) Close() error {
