@@ -174,7 +174,6 @@ export const msgKeys = {
   optionCreateNewChannel: 'optionCreateNewChannel',
   optionUseExistingChannel: 'optionUseExistingChannel',
   placeholderSelectChannel: 'placeholderSelectChannel',
-  loadingChannels: 'loadingChannels',
   hintExistingChannelScope: 'hintExistingChannelScope',
   emptyExistingChannels: 'emptyExistingChannels',
   noMatchingChannels: 'noMatchingChannels',

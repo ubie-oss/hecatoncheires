@@ -176,7 +176,6 @@ export const ja: Messages = {
   optionCreateNewChannel: '新しいチャンネルを作成する',
   optionUseExistingChannel: '既存のチャンネルを使う',
   placeholderSelectChannel: 'チャンネルを選択',
-  loadingChannels: 'チャンネルを読み込んでいます…',
   hintExistingChannelScope: 'あなたが参加しているチャンネルを表示します。プライベートチャンネルは、Bot を招待したものだけを表示します。',
   emptyExistingChannels: '選べるチャンネルがありません。使いたいチャンネルに参加してから、「再試行」を押してください。プライベートチャンネルの場合は Bot も招待してください。',
   noMatchingChannels: '検索に一致するチャンネルがありません。',

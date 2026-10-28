@@ -176,7 +176,6 @@ export const en: Messages = {
   optionCreateNewChannel: 'Create a new channel',
   optionUseExistingChannel: 'Use an existing channel',
   placeholderSelectChannel: 'Select a channel',
-  loadingChannels: 'Loading channels…',
   hintExistingChannelScope: 'Channels you have joined are listed. Private channels are listed only if the bot has been invited.',
   emptyExistingChannels: 'No channels are available. Join the channel you want to use, then press Retry. For a private channel, also invite the bot.',
   noMatchingChannels: 'No channels match your search.',

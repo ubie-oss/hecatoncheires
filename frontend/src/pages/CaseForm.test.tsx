@@ -320,7 +320,7 @@ describe('CaseForm Slack channel source', () => {
     // The response never arrives within the test, so the loading state stays.
     renderChannelForm([{ ...candidatesMock({ calls: 0 }), delay: 100_000 }])
     fireEvent.click(await screen.findByTestId('case-channel-source-existing'))
-    expect(await screen.findByText('Loading channels…')).toBeInTheDocument()
+    expect(await screen.findByText('Loading channels...')).toBeInTheDocument()
     expect(screen.queryByRole('combobox', { name: 'Slack channel' })).not.toBeInTheDocument()
   })
 
