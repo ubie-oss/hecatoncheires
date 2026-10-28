@@ -150,14 +150,19 @@ export const CREATE_CASE = gql`
   }
 `
 
-// Channels the acting user may link a new case to. Always fetched from the
-// network: membership and links change between two openings of the form.
+// Searches the channels the acting user may link a new case to. The server
+// keeps the user's channel list and searches it; refresh: true makes it fetch
+// the list from Slack first.
 export const GET_EXISTING_SLACK_CHANNEL_CANDIDATES = gql`
-  query GetExistingSlackChannelCandidates($workspaceId: String!) {
-    existingSlackChannelCandidates(workspaceId: $workspaceId) {
-      id
-      name
-      isPrivate
+  query GetExistingSlackChannelCandidates($workspaceId: String!, $query: String, $refresh: Boolean) {
+    existingSlackChannelCandidates(workspaceId: $workspaceId, query: $query, refresh: $refresh) {
+      channels {
+        id
+        name
+        isPrivate
+      }
+      hasMore
+      fetchedAt
     }
   }
 `

@@ -248,6 +248,9 @@ func (m *mockRepo) HomeMessage() interfaces.HomeMessageRepository {
 func (m *mockRepo) AssigneeRanking() interfaces.AssigneeRankingRepository {
 	panic("unexpected call: AssigneeRanking()")
 }
+func (m *mockRepo) SlackMemberChannels() interfaces.SlackMemberChannelsRepository {
+	panic("unexpected call: SlackMemberChannels()")
+}
 func (m *mockRepo) Memo() interfaces.MemoRepository {
 	panic("unexpected call: Memo()")
 }

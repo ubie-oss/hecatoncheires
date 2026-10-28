@@ -5,11 +5,13 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/m-mizutani/goerr/v2"
 	"github.com/m-mizutani/hecatoncheires/pkg/domain/model"
 	"github.com/m-mizutani/hecatoncheires/pkg/domain/model/auth"
 	"github.com/m-mizutani/hecatoncheires/pkg/service/slack"
+	"github.com/m-mizutani/hecatoncheires/pkg/utils/async"
 )
 
 // CreateCaseOption customises CaseUseCase.CreateCase.
@@ -170,12 +172,48 @@ func (uc *CaseUseCase) findCaseBySlackChannelInAnyWorkspace(ctx context.Context,
 	return nil, "", nil
 }
 
-// ListExistingSlackChannelCandidates returns the channels the acting user may
-// link a new case to in workspaceID: channels the user belongs to that the
+const (
+	// slackMemberChannelsFreshWindow is how long a stored channel list is
+	// served before a background refresh is started. Joining a channel is
+	// rare next to searching for one, and a user who just joined can reload
+	// the list from the picker.
+	slackMemberChannelsFreshWindow = 10 * time.Minute
+	// slackMemberChannelsRefreshLease is how long a refresh claim keeps other
+	// requests from starting another listing. It is longer than listing a
+	// user with tens of thousands of channels takes at Slack's Tier 3 rate.
+	slackMemberChannelsRefreshLease = 15 * time.Minute
+	// existingSlackChannelCandidateLimit is how many matches one search
+	// returns; the picker asks the user to type more when there are others.
+	existingSlackChannelCandidateLimit = 50
+	// slackChannelLinkCheckBatch is how many matches are checked for an
+	// existing link per round of repository lookups (Firestore's `in` bound).
+	slackChannelLinkCheckBatch = 30
+)
+
+// SlackChannelCandidateList is one search result of the existing-channel
+// picker.
+type SlackChannelCandidateList struct {
+	// Candidates are at most existingSlackChannelCandidateLimit matches,
+	// sorted by name.
+	Candidates []SlackChannelCandidate
+	// HasMore is true when more channels match than Candidates holds.
+	HasMore bool
+	// FetchedAt is when the channel list the search ran on was fetched from
+	// Slack.
+	FetchedAt time.Time
+}
+
+// ListExistingSlackChannelCandidates searches the channels the acting user
+// may link a new case to in workspaceID: channels the user belongs to that the
 // bot can see, minus every workspace's configured channels and every channel
-// already linked to a case, sorted by name. The list is for display only;
-// CreateCase validates the chosen channel again.
-func (uc *CaseUseCase) ListExistingSlackChannelCandidates(ctx context.Context, workspaceID string) ([]SlackChannelCandidate, error) {
+// already linked to a case. A channel matches when its name contains query,
+// ignoring case and a leading "#"; an empty query matches every channel. The
+// result is for display only; CreateCase validates the chosen channel again.
+//
+// The user's channel list comes from the stored SlackMemberChannels. It is
+// fetched from Slack when none is stored or refresh is true, and refreshed in
+// the background when it is older than slackMemberChannelsFreshWindow.
+func (uc *CaseUseCase) ListExistingSlackChannelCandidates(ctx context.Context, workspaceID, query string, refresh bool) (*SlackChannelCandidateList, error) {
 	if !uc.ExistingSlackChannelAllowed(workspaceID) {
 		return nil, goerr.Wrap(ErrExistingSlackChannelDisabled, "existing slack channel candidates requested",
 			goerr.V("workspace_id", workspaceID))
@@ -186,22 +224,115 @@ func (uc *CaseUseCase) ListExistingSlackChannelCandidates(ctx context.Context, w
 			goerr.V("workspace_id", workspaceID))
 	}
 
-	channels, err := uc.slackService.ListMemberChannels(ctx, tok.Sub, uc.slackTeamIDForWorkspace(workspaceID))
+	list, err := uc.slackMemberChannels(ctx, workspaceID, tok.Sub, refresh)
 	if err != nil {
-		return nil, goerr.Wrap(err, "failed to list slack channels of the user",
-			goerr.V("workspace_id", workspaceID))
+		return nil, err
 	}
 
-	candidates := make([]SlackChannelCandidate, 0, len(channels))
-	ids := make([]string, 0, len(channels))
-	for _, ch := range channels {
+	needle := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(query), "#"))
+	matches := make([]SlackChannelCandidate, 0)
+	for _, ch := range list.Channels {
 		if uc.workspaceRegistry.IsConfiguredChannel(ch.ID) {
 			continue
 		}
-		candidates = append(candidates, SlackChannelCandidate{ID: ch.ID, Name: ch.Name, IsPrivate: ch.IsPrivate})
-		ids = append(ids, ch.ID)
+		if needle != "" && !strings.Contains(strings.ToLower(ch.Name), needle) {
+			continue
+		}
+		matches = append(matches, SlackChannelCandidate{ID: ch.ID, Name: ch.Name, IsPrivate: ch.IsPrivate})
+	}
+	slices.SortFunc(matches, func(a, b SlackChannelCandidate) int {
+		if n := strings.Compare(a.Name, b.Name); n != 0 {
+			return n
+		}
+		return strings.Compare(a.ID, b.ID)
+	})
+
+	// Only the matches that can reach the result are checked for a link, in
+	// name order, so a search costs lookups for the page it returns rather
+	// than for every channel the user has joined.
+	result := &SlackChannelCandidateList{Candidates: []SlackChannelCandidate{}, FetchedAt: list.FetchedAt}
+	for batch := range slices.Chunk(matches, slackChannelLinkCheckBatch) {
+		linked, err := uc.linkedSlackChannels(ctx, batch)
+		if err != nil {
+			return nil, err
+		}
+		for _, c := range batch {
+			if _, ok := linked[c.ID]; ok {
+				continue
+			}
+			if len(result.Candidates) == existingSlackChannelCandidateLimit {
+				result.HasMore = true
+				return result, nil
+			}
+			result.Candidates = append(result.Candidates, c)
+		}
+	}
+	return result, nil
+}
+
+// slackMemberChannels returns the stored channel list of userID, fetching it
+// from Slack first when none is stored or refresh is true. A stale list is
+// returned as is, and one request among those that see it stale (the one that
+// wins the refresh claim) refreshes it in the background.
+func (uc *CaseUseCase) slackMemberChannels(ctx context.Context, workspaceID, userID string, refresh bool) (*model.SlackMemberChannels, error) {
+	if !refresh {
+		list, err := uc.repo.SlackMemberChannels().Get(ctx, workspaceID, userID)
+		if err == nil {
+			now := time.Now()
+			if !list.IsFresh(now, slackMemberChannelsFreshWindow) {
+				claimed, err := uc.repo.SlackMemberChannels().ClaimRefresh(ctx, workspaceID, userID, now, slackMemberChannelsRefreshLease)
+				if err != nil {
+					return nil, goerr.Wrap(err, "failed to claim slack member channels refresh",
+						goerr.V("workspace_id", workspaceID), goerr.V("user_id", userID))
+				}
+				if claimed {
+					async.Dispatch(ctx, func(ctx context.Context) error {
+						_, err := uc.fetchSlackMemberChannels(ctx, workspaceID, userID)
+						return err
+					})
+				}
+			}
+			return list, nil
+		}
+		if !isRepoNotFound(err) {
+			return nil, goerr.Wrap(err, "failed to get slack member channels",
+				goerr.V("workspace_id", workspaceID), goerr.V("user_id", userID))
+		}
+	}
+	return uc.fetchSlackMemberChannels(ctx, workspaceID, userID)
+}
+
+// fetchSlackMemberChannels lists userID's channels from Slack and stores them.
+func (uc *CaseUseCase) fetchSlackMemberChannels(ctx context.Context, workspaceID, userID string) (*model.SlackMemberChannels, error) {
+	channels, err := uc.slackService.ListMemberChannels(ctx, userID, uc.slackTeamIDForWorkspace(workspaceID))
+	if err != nil {
+		return nil, goerr.Wrap(err, "failed to list slack channels of the user",
+			goerr.V("workspace_id", workspaceID), goerr.V("user_id", userID))
 	}
 
+	list := &model.SlackMemberChannels{
+		WorkspaceID: workspaceID,
+		UserID:      userID,
+		Channels:    make([]model.SlackMemberChannel, len(channels)),
+		FetchedAt:   time.Now().UTC(),
+	}
+	for i, ch := range channels {
+		list.Channels[i] = model.SlackMemberChannel{ID: ch.ID, Name: ch.Name, IsPrivate: ch.IsPrivate}
+	}
+	if err := uc.repo.SlackMemberChannels().Set(ctx, list); err != nil {
+		return nil, goerr.Wrap(err, "failed to store slack member channels",
+			goerr.V("workspace_id", workspaceID), goerr.V("user_id", userID))
+	}
+	return list, nil
+}
+
+// linkedSlackChannels returns the IDs among candidates that a case in any
+// registered workspace already uses as its channel.
+func (uc *CaseUseCase) linkedSlackChannels(ctx context.Context, candidates []SlackChannelCandidate) (map[string]struct{}, error) {
+	ids := make([]string, len(candidates))
+	for i, c := range candidates {
+		ids[i] = c.ID
+	}
 	linked := make(map[string]struct{})
 	for _, entry := range uc.workspaceRegistry.List() {
 		found, err := uc.repo.Case().GetBySlackChannelIDs(ctx, entry.Workspace.ID, ids)
@@ -213,16 +344,5 @@ func (uc *CaseUseCase) ListExistingSlackChannelCandidates(ctx context.Context, w
 			linked[id] = struct{}{}
 		}
 	}
-	candidates = slices.DeleteFunc(candidates, func(c SlackChannelCandidate) bool {
-		_, ok := linked[c.ID]
-		return ok
-	})
-
-	slices.SortFunc(candidates, func(a, b SlackChannelCandidate) int {
-		if n := strings.Compare(a.Name, b.Name); n != 0 {
-			return n
-		}
-		return strings.Compare(a.ID, b.ID)
-	})
-	return candidates, nil
+	return linked, nil
 }

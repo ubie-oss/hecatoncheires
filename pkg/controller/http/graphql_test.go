@@ -6524,7 +6524,7 @@ func TestGraphQLHandler_ExistingSlackChannel(t *testing.T) {
 	})
 
 	t.Run("candidates are FORBIDDEN in a denied workspace and listed in an allowed one", func(t *testing.T) {
-		query := `query($workspaceId: String!) { existingSlackChannelCandidates(workspaceId: $workspaceId) { id name isPrivate } }`
+		query := `query($workspaceId: String!) { existingSlackChannelCandidates(workspaceId: $workspaceId, query: "FR", refresh: true) { channels { id name isPrivate } hasMore fetchedAt } }`
 		before := slackFake.listCalls
 		resp := parseGraphQLResponse(t, executeGraphQLRequestWithAuth(t, h, query, map[string]any{"workspaceId": wsDenied}, user))
 		gt.Value(t, errorCodes(resp)).Equal([]string{gqlctrl.ErrCodeForbidden})
@@ -6535,15 +6535,21 @@ func TestGraphQLHandler_ExistingSlackChannel(t *testing.T) {
 		resp = parseGraphQLResponse(t, executeGraphQLRequestWithAuth(t, h, query, map[string]any{"workspaceId": wsOn}, user))
 		gt.Array(t, resp.Errors).Length(0).Required()
 		var data struct {
-			Candidates []struct {
-				ID        string `json:"id"`
-				Name      string `json:"name"`
-				IsPrivate bool   `json:"isPrivate"`
+			List struct {
+				Channels []struct {
+					ID        string `json:"id"`
+					Name      string `json:"name"`
+					IsPrivate bool   `json:"isPrivate"`
+				} `json:"channels"`
+				HasMore   bool      `json:"hasMore"`
+				FetchedAt time.Time `json:"fetchedAt"`
 			} `json:"existingSlackChannelCandidates"`
 		}
 		gt.NoError(t, json.Unmarshal(resp.Data, &data)).Required()
-		gt.Array(t, data.Candidates).Length(1).Required()
-		gt.Value(t, data.Candidates[0].ID).Equal("C-FREE")
-		gt.Value(t, data.Candidates[0].Name).Equal("free")
+		gt.Array(t, data.List.Channels).Length(1).Required()
+		gt.Value(t, data.List.Channels[0].ID).Equal("C-FREE")
+		gt.Value(t, data.List.Channels[0].Name).Equal("free")
+		gt.Bool(t, data.List.HasMore).False()
+		gt.Bool(t, data.List.FetchedAt.IsZero()).False()
 	})
 }

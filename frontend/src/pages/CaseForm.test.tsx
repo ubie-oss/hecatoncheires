@@ -132,10 +132,14 @@ const CANDIDATES = [
 // candidatesMock answers the candidate query; counter records each request.
 function candidatesMock(counter: { calls: number }, candidates = CANDIDATES): MockedResponse {
   return {
-    request: { query: GET_EXISTING_SLACK_CHANNEL_CANDIDATES, variables: { workspaceId: WORKSPACE_ID } },
+    request: { query: GET_EXISTING_SLACK_CHANNEL_CANDIDATES, variables: { workspaceId: WORKSPACE_ID, query: '' } },
     result: () => {
       counter.calls++
-      return { data: { existingSlackChannelCandidates: candidates } }
+      return {
+        data: {
+          existingSlackChannelCandidates: { channels: candidates, hasMore: false, fetchedAt: '2026-10-28T03:15:00Z' },
+        },
+      }
     },
     maxUsageCount: 10,
   }
