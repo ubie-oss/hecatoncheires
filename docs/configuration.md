@@ -797,7 +797,7 @@ the workspace is in channel mode and the server has Slack configured.
   at most 50 matches. A list older than 10 minutes is still used, and one
   request refreshes it from Slack in the background (a claim in
   `workspaces/{workspaceID}/slackMemberChannelRefreshes/{userID}` keeps other
-  requests from starting the same listing for 15 minutes). **Reload list** in
+  requests from starting the same listing for 15 minutes). **Reload** under
   the picker fetches it from Slack at once. Whether a channel is already linked
   to a case is checked on every search, not stored. The stored list is derived
   data: deleting it only makes the next search list the channels again.

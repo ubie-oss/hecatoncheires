@@ -100,18 +100,28 @@ describe('ExistingSlackChannelSelect', () => {
     renderSelect([searchMock({ channels: ALL_CHANNELS }), searchMock({ query: 'zzz' })])
     const combobox = await openMenu()
     fireEvent.change(combobox, { target: { value: 'zzz' } })
-    expect(await screen.findByText('No channels match your search.')).toBeInTheDocument()
+    expect(
+      await screen.findByText('No channels match. A private channel appears only after the bot is invited.'),
+    ).toBeInTheDocument()
     expect(screen.queryByTestId('existing-slack-channel-empty')).not.toBeInTheDocument()
   })
 
-  it('asks the user to narrow the search when more channels match than are shown', async () => {
+  it('asks the user to narrow the search under the options when more channels match than are shown', async () => {
     renderSelect([searchMock({ channels: ALL_CHANNELS, hasMore: true })])
+    await openMenu()
     expect(await screen.findByTestId('existing-slack-channel-has-more')).toHaveTextContent(
-      'More channels match than are shown. Type more of the channel name to narrow the list.',
+      'More channels match. Type more to narrow the list.',
     )
   })
 
-  it('says when the channel list was fetched and reloads it from Slack before searching again', async () => {
+  it('shows no narrowing note when every match is listed', async () => {
+    renderSelect([searchMock({ channels: ALL_CHANNELS })])
+    await openMenu()
+    await screen.findByRole('option', { name: 'general' })
+    expect(screen.queryByTestId('existing-slack-channel-has-more')).not.toBeInTheDocument()
+  })
+
+  it('says on one line when the channel list was fetched and reloads it from Slack before searching again', async () => {
     const refreshCounter = { calls: 0 }
     const searchCounter = { calls: 0 }
     renderSelect([
@@ -119,7 +129,8 @@ describe('ExistingSlackChannelSelect', () => {
       searchMock({ refresh: true, channels: ALL_CHANNELS, counter: refreshCounter }),
     ])
     const fetchedAt = await screen.findByTestId('existing-slack-channel-fetched-at')
-    expect(fetchedAt).toHaveTextContent(/^Channel list as of .+\. If a channel you joined is missing, reload the list\.$/)
+    expect(fetchedAt).toHaveTextContent(/^Your channels as of .+$/)
+    expect(fetchedAt.parentElement).toHaveTextContent(/^Your channels as of .+ · Reload$/)
     expect(searchCounter.calls).toBe(1)
 
     fireEvent.click(screen.getByTestId('existing-slack-channel-reload'))

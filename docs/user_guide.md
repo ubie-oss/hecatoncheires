@@ -138,11 +138,12 @@ the **New case** form shows a **Slack channel** choice:
    list of channels you have joined from Slack, which can take a while if you
    are in many channels; after that the stored list is used.
 2. Type part of the channel name to search, then pick one channel. Up to 50
-   matches are shown; if more match, the form asks you to type more of the
-   name. The list shows channels you have joined; a private channel appears
-   only when the bot has been invited to it. Channels already linked to a Case
-   are not listed. The form shows when the channel list was read from Slack; if
-   a channel you joined recently is missing, press **Reload list**.
+   matches are shown; if more match, a note under the options asks you to type
+   more of the name. The list shows channels you have joined; a private channel
+   appears only when the bot has been invited to it. Channels already linked to
+   a Case are not listed. The line under the picker shows when your channels
+   were read from Slack; if a channel you joined recently is missing, press
+   **Reload** on that line.
 3. The form shows whether the Case will be private: it follows the channel (a
    private channel makes a private Case), so the **Private case** checkbox is
    hidden. Switching back to **Create a new channel** restores the checkbox as

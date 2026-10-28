@@ -54,6 +54,20 @@ const SingleValue = (props: any) => (
   </components.SingleValue>
 )
 
+const menuNoteStyle = { fontSize: 11.5, color: 'var(--fg-muted)', padding: 'var(--spacing-xs) var(--spacing-md-sm)' }
+
+// Appends the "more channels match" note under the options, where the user is
+// looking when the list is cut off. react-select forwards unknown props to
+// custom components through selectProps, which is how the note reaches it.
+const MenuList = (props: any) => (
+  <components.MenuList {...props}>
+    {props.children}
+    {props.selectProps.moreMatchesNote && (
+      <div style={menuNoteStyle} data-testid="existing-slack-channel-has-more">{props.selectProps.moreMatchesNote}</div>
+    )}
+  </components.MenuList>
+)
+
 interface CandidateListData {
   existingSlackChannelCandidates: {
     channels: SlackChannelCandidate[]
@@ -69,6 +83,17 @@ const SEARCH_DEBOUNCE_MS = 250
 
 const hintStyle = { fontSize: 11.5, color: 'var(--fg-muted)', marginTop: 4 }
 const errorStyle = { color: 'var(--danger)', fontSize: 12, marginTop: 4 }
+// A link-like text button: reloading is an occasional repair, so it should not
+// compete with the picker for attention.
+const textButtonStyle = {
+  background: 'none',
+  border: 'none',
+  padding: 0,
+  font: 'inherit',
+  color: 'inherit',
+  textDecoration: 'underline',
+  cursor: 'pointer',
+}
 
 export default function ExistingSlackChannelSelect({
   workspaceId,
@@ -185,7 +210,8 @@ export default function ExistingSlackChannelSelect({
         loadingMessage={() => t('loadingChannels')}
         placeholder={t('placeholderSelectChannel')}
         noOptionsMessage={() => (inputValue ? t('noMatchingChannels') : t('emptyExistingChannels'))}
-        components={{ Option, SingleValue }}
+        components={{ Option, SingleValue, MenuList }}
+        {...({ moreMatchesNote: list.hasMore ? t('hintMoreChannelsMatch') : '' } as object)}
       />
       {(queryError || reloadFailed) && (
         <div style={errorStyle} data-testid="existing-slack-channel-load-error">{t('errorLoadChannels')}</div>
@@ -200,18 +226,19 @@ export default function ExistingSlackChannelSelect({
           </div>
         </>
       ) : (
-        <>
-          <div style={hintStyle}>{t('hintExistingChannelScope')}</div>
-          {list.hasMore && (
-            <div style={hintStyle} data-testid="existing-slack-channel-has-more">{t('hintMoreChannelsMatch')}</div>
-          )}
-          <div className="row" style={{ ...hintStyle, gap: 8, alignItems: 'center' }}>
-            <span data-testid="existing-slack-channel-fetched-at">{t('hintChannelListFetchedAt', { time: fetchedAt })}</span>
-            <Button variant="ghost" onClick={() => { void reloadFromSlack() }} disabled={busy} data-testid="existing-slack-channel-reload">
-              {t('reloadChannelList')}
-            </Button>
-          </div>
-        </>
+        <div style={hintStyle}>
+          <span data-testid="existing-slack-channel-fetched-at">{t('hintChannelListFetchedAt', { time: fetchedAt })}</span>
+          {' · '}
+          <button
+            type="button"
+            style={textButtonStyle}
+            onClick={() => { void reloadFromSlack() }}
+            disabled={busy}
+            data-testid="existing-slack-channel-reload"
+          >
+            {t('reloadChannelList')}
+          </button>
+        </div>
       )}
       {value && (
         <div style={hintStyle} data-testid="existing-slack-channel-visibility">
