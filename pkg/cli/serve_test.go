@@ -58,6 +58,9 @@ func TestStatusForExtensionCode(t *testing.T) {
 	gt.Number(t, cli.StatusForExtensionCodeForTest(gqlctrl.ErrCodeFieldValidationFailed)).Equal(http.StatusBadRequest)
 	gt.Number(t, cli.StatusForExtensionCodeForTest(gqlctrl.ErrCodeInvalidStatusTransition)).Equal(http.StatusConflict)
 	gt.Number(t, cli.StatusForExtensionCodeForTest(gqlctrl.ErrCodeActivationFailed)).Equal(0) // server fault → 500 fallback
+	gt.Number(t, cli.StatusForExtensionCodeForTest(gqlctrl.ErrCodeSlackChannelNotLinkable)).Equal(http.StatusBadRequest)
+	gt.Number(t, cli.StatusForExtensionCodeForTest(gqlctrl.ErrCodeSlackChannelLinked)).Equal(http.StatusConflict)
+	gt.Number(t, cli.StatusForExtensionCodeForTest(gqlctrl.ErrCodeSlackChannelJoinFailed)).Equal(0) // may be a missing scope → 500
 	gt.Number(t, cli.StatusForExtensionCodeForTest("")).Equal(0)
 	gt.Number(t, cli.StatusForExtensionCodeForTest("WHATEVER")).Equal(0)
 }

@@ -160,6 +160,10 @@ type SlackSection struct {
 	// the agent runs in WorkspaceChannel (which must then be set), in thread
 	// mode it runs on a channel-root mention in the monitored Channel.
 	WorkspaceAgent *WorkspaceAgentSection `toml:"workspace_agent"`
+	// AllowExistingChannel lets case creation link an existing Slack channel
+	// instead of creating one. Channel mode only; ignored (with a warning) in
+	// thread mode.
+	AllowExistingChannel bool `toml:"allow_existing_channel"`
 }
 
 // WorkspaceAgentSection represents the [slack.workspace_agent] subsection: the
@@ -325,6 +329,9 @@ type WorkspaceConfig struct {
 	// WorkspaceAgentPrompt is the resolved custom prompt for the workspace agent
 	// (from [slack.workspace_agent] prompt/prompt_file), empty when unset.
 	WorkspaceAgentPrompt string
+	// AllowExistingSlackChannel is [slack] allow_existing_channel; always
+	// false for a thread-mode workspace.
+	AllowExistingSlackChannel bool
 }
 
 // Labels represents entity display labels
@@ -996,6 +1003,10 @@ func parseWorkspaceConfig(src WorkspaceConfigSource) (*WorkspaceConfig, error) {
 			logging.Default().Warn("thread-mode workspace ignores channel-mode Slack settings (channel_prefix / invite / welcome_messages)",
 				"workspace_id", wsID, "config_path", path)
 		}
+		if appCfg.Slack.AllowExistingChannel {
+			logging.Default().Warn("thread-mode workspace ignores [slack] allow_existing_channel",
+				"workspace_id", wsID, "config_path", path)
+		}
 	} else {
 		if appCfg.Case != nil {
 			logging.Default().Warn("channel-mode workspace ignores [case.status]",
@@ -1036,6 +1047,8 @@ func parseWorkspaceConfig(src WorkspaceConfigSource) (*WorkspaceConfig, error) {
 		ReactionEmoji:        normalizeReactionEmoji(appCfg.Slack.Reaction),
 		WorkspaceChannelID:   appCfg.Slack.WorkspaceChannel,
 		WorkspaceAgentPrompt: workspaceAgentPrompt,
+		// A thread-mode case has no channel of its own to link.
+		AllowExistingSlackChannel: appCfg.Slack.AllowExistingChannel && !caseMode.IsThread(),
 	}, nil
 }
 
@@ -1122,6 +1135,8 @@ func BuildWorkspaceRegistry(workspaceConfigs []*WorkspaceConfig) *model.Workspac
 			ReactionEmoji:           wc.ReactionEmoji,
 			SlackWorkspaceChannelID: wc.WorkspaceChannelID,
 			WorkspaceAgentPrompt:    wc.WorkspaceAgentPrompt,
+
+			AllowExistingSlackChannel: wc.AllowExistingSlackChannel,
 		})
 	}
 

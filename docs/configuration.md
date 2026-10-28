@@ -759,6 +759,7 @@ channel_prefix = "risk"
 | `accept_bot` | bool | No | `false` | Thread mode only. When `true`, **bot-authored** events also start a Case (a channel-root post in `instant` mode, an @mention in `mention` mode) — e.g. an intake-form app's relayed request. When `false`, only human-authored events start a Case, so the channel is not flooded with a Case per bot notification. |
 | `reaction` | string | No | — | Thread mode only. Emoji name (with or without surrounding colons, e.g. `incident` or `:incident:`) that starts a Case when added to a message. Must be **unique across workspaces**. Setting it in channel mode is a config error. Requires the `reactions:read` scope and the `reaction_added` event subscription; the bot must be a member of any channel where the emoji is used. See [Reaction-triggered case creation](slack.md#reaction-triggered-case-creation). |
 | `workspace_channel` | string | No | — | **Channel mode only.** A workspace-level shared channel ID (e.g. `C0123456789`) where the cross-case **workspace agent** runs. Parallels `channel` (the thread-mode monitored channel) but is a distinct role. Must be **unique across workspaces** (and must not collide with any workspace's monitored `channel`). Setting it in thread mode is a config error — there the monitored channel already hosts the agent. The bot must be a member. See [Workspace agent](#workspace-agent). |
+| `allow_existing_channel` | bool | No | `false` | **Channel mode only.** When `true`, the Web case-creation form lets the user link the new case to an existing Slack channel instead of creating one. Ignored in thread mode (startup warning). Requires the `channels:join` bot scope. See [Linking an existing channel](#linking-an-existing-channel). |
 
 When a case is created (channel mode), Hecatoncheires can automatically create a Slack channel with the naming pattern: `{channel_prefix}-{case_number}`.
 
@@ -771,6 +772,40 @@ to the `message.channels` (and `message.groups` for private channels) events. A
 `[case.status]` section is required in thread mode — see
 [Case Section](#case-section-thread-mode). See also
 [Slack Integration → Thread mode](slack.md#thread-mode-monitored-channel).
+
+### Linking an existing channel
+
+With `allow_existing_channel = true`, the **New case** form of the Web UI shows a
+**Slack channel** choice: *Create a new channel* (the default, the behaviour
+without this setting) or *Use an existing channel*. The choice appears only when
+the workspace is in channel mode and the server has Slack configured.
+
+- **One channel per case, one case per channel.** A channel already linked to a
+  case in *any* workspace is rejected when the case is created. Two requests for
+  the same channel at almost the same moment can both succeed; this is not
+  detected or repaired.
+- **Which channels are offered.** Channels the user has joined and the bot can
+  see, minus every workspace's monitored `channel` / `workspace_channel` and
+  channels already linked to a case. A private channel is listed only when the
+  bot is a member — the bot cannot join a private channel itself, so invite it
+  first.
+- **Bot membership.** If the bot is not in the chosen public channel, it joins
+  it (`conversations.join`) when the case is created. If the join fails, the
+  case is not created. The join happens before the user's membership is
+  checked, so a request that fails that last check leaves the bot in the
+  channel.
+- **Privacy follows the channel.** A private channel makes the case private.
+  The private toggle is hidden; the GraphQL `createCase` input must omit
+  `isPrivate` when `existingSlackChannelID` is set.
+- **Not available for drafts.** *Save as draft* is disabled while an existing
+  channel is chosen; submitting a draft always creates a new channel.
+- **Renaming.** Changing the case title still renames the channel. Slack only
+  lets the channel creator, a Workspace Admin or a Channel Manager rename a
+  channel, so for a channel the bot did not create the rename usually fails and
+  the title change is rejected. Keep the title of such a case unchanged.
+- Messages posted to the channel before it was linked are not imported.
+
+Turning the setting off later does not affect cases already linked.
 
 ### Workspace agent
 

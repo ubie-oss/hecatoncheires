@@ -85,6 +85,10 @@ type WorkspaceEntry struct {
 	// appended to the host-owned base system prompt and cannot relax it. Empty
 	// when unset.
 	WorkspaceAgentPrompt string
+	// AllowExistingSlackChannel lets case creation link an existing Slack
+	// channel instead of creating one ([slack] allow_existing_channel).
+	// Channel mode only; always false for a thread-mode workspace.
+	AllowExistingSlackChannel bool
 }
 
 // IsThreadMode reports whether this workspace uses thread-per-case binding.
@@ -188,6 +192,18 @@ func (r *WorkspaceRegistry) FindByReactionEmoji(emoji string) (*WorkspaceEntry, 
 		}
 	}
 	return nil, false
+}
+
+// IsConfiguredChannel reports whether channelID is any workspace's thread-mode
+// monitor channel or channel-mode workspace channel. Such a channel already
+// routes Slack events for its configured purpose, so it can never become a
+// case channel. A nil registry or an empty channelID returns false.
+func (r *WorkspaceRegistry) IsConfiguredChannel(channelID string) bool {
+	if _, ok := r.FindByMonitorChannel(channelID); ok {
+		return true
+	}
+	_, ok := r.FindByWorkspaceChannel(channelID)
+	return ok
 }
 
 // List returns all registered workspace entries in registration order

@@ -468,6 +468,70 @@ func runCaseRepositoryTest(t *testing.T, newRepo func(t *testing.T) interfaces.R
 		gt.Value(t, found).Nil()
 	})
 
+	t.Run("GetBySlackChannelIDs returns linked cases keyed by channel across query chunks", func(t *testing.T) {
+		repo := newRepo(t)
+		wsID := fmt.Sprintf("ws-%d", time.Now().UnixNano())
+		otherWsID := fmt.Sprintf("ws-other-%d", time.Now().UnixNano())
+		ctx := context.Background()
+		prefix := fmt.Sprintf("C%d-", time.Now().UnixNano())
+
+		// 35 IDs exceed one Firestore `in` query (30 values), so the linked
+		// channels are placed on both sides of the chunk boundary.
+		channelIDs := make([]string, 35)
+		for i := range channelIDs {
+			channelIDs[i] = fmt.Sprintf("%s%02d", prefix, i)
+		}
+		linked := []string{channelIDs[2], channelIDs[29], channelIDs[33]}
+
+		now := time.Now().UTC().Truncate(time.Millisecond)
+		want := make(map[string]*model.Case, len(linked))
+		for i, ch := range linked {
+			created, err := repo.Case().Create(ctx, wsID, &model.Case{
+				ReporterID:     "U-TEST-DEFAULT",
+				CreatedAt:      now,
+				UpdatedAt:      now,
+				Title:          fmt.Sprintf("Linked case %d", i),
+				Description:    "linked to an existing channel",
+				AssigneeIDs:    []string{"U111"},
+				SlackChannelID: ch,
+				ChannelUserIDs: []string{"U111", "U222"},
+				IsPrivate:      i == 1,
+				Status:         types.CaseStatusOpen,
+			})
+			gt.NoError(t, err).Required()
+			stored, err := repo.Case().Get(ctx, wsID, created.ID)
+			gt.NoError(t, err).Required()
+			want[ch] = stored
+		}
+		// A case in another workspace must not leak into this workspace's result.
+		_, err := repo.Case().Create(ctx, otherWsID, &model.Case{
+			ReporterID:     "U-TEST-DEFAULT",
+			CreatedAt:      now,
+			UpdatedAt:      now,
+			Title:          "Other workspace",
+			SlackChannelID: channelIDs[5],
+		})
+		gt.NoError(t, err).Required()
+
+		got, err := repo.Case().GetBySlackChannelIDs(ctx, wsID, channelIDs)
+		gt.NoError(t, err).Required()
+		gt.Number(t, len(got)).Equal(len(linked)).Required()
+		for _, ch := range linked {
+			gt.Map(t, got).HasKey(ch).Required()
+			gt.Value(t, got[ch]).Equal(want[ch])
+		}
+	})
+
+	t.Run("GetBySlackChannelIDs returns an empty map for empty input", func(t *testing.T) {
+		repo := newRepo(t)
+		wsID := fmt.Sprintf("ws-%d", time.Now().UnixNano())
+
+		got, err := repo.Case().GetBySlackChannelIDs(context.Background(), wsID, nil)
+		gt.NoError(t, err).Required()
+		gt.Value(t, got).NotNil()
+		gt.Number(t, len(got)).Equal(0)
+	})
+
 	t.Run("thread-mode round-trip persists SlackThreadTS and BoardStatus", func(t *testing.T) {
 		repo := newRepo(t)
 		wsID := fmt.Sprintf("ws-%d", time.Now().UnixNano())

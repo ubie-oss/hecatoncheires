@@ -87,6 +87,14 @@ func (m *mockSlackService) ListJoinedChannels(ctx context.Context, teamID string
 	return nil, nil
 }
 
+func (m *mockSlackService) ListMemberChannels(ctx context.Context, userID, teamID string) ([]slack.Channel, error) {
+	return nil, nil
+}
+
+func (m *mockSlackService) JoinChannel(ctx context.Context, channelID string) error {
+	return nil
+}
+
 func (m *mockSlackService) GetChannelNames(ctx context.Context, ids []string) (map[string]string, error) {
 	return nil, nil
 }

@@ -72,6 +72,18 @@ type FieldConfiguration {
   fields: [FieldDefinition!]!
   labels: EntityLabels!
   actionConfig: ActionConfig!
+  # allowExistingSlackChannel reports whether createCase accepts
+  # existingSlackChannelID in this workspace: [slack] allow_existing_channel is
+  # set, the workspace is in channel mode, and Slack is configured.
+  allowExistingSlackChannel: Boolean!
+}
+
+# SlackChannelCandidate is a Slack channel the acting user may link a new case
+# to. A Slack channel id is globally unique, so `id` alone is its identity.
+type SlackChannelCandidate {
+  id: String!
+  name: String!
+  isPrivate: Boolean!
 }
 
 # ActionStatusDefinition describes a single action status configurable per
@@ -469,6 +481,12 @@ input CreateCaseInput {
   isPrivate: Boolean
   # isTest marks the case as a test case. Defaults to false when omitted.
   isTest: Boolean
+  # existingSlackChannelID links the new case to this existing Slack channel
+  # instead of creating one. Accepted only when
+  # fieldConfiguration.allowExistingSlackChannel is true. isPrivate must be
+  # omitted or null (true and false are both rejected); the case's privacy
+  # follows the channel.
+  existingSlackChannelID: String
 }
 
 # CreateDraftInput mirrors CreateCaseInput but every field is optional —
@@ -804,6 +822,13 @@ type Query {
 
   # Configuration
   fieldConfiguration(workspaceId: String!): FieldConfiguration!
+
+  # existingSlackChannelCandidates lists the channels the acting user may link
+  # a new case to: channels the user has joined that the bot can see (private
+  # ones only when the bot is a member), excluding channels used by any
+  # workspace configuration and channels already linked to a case. Display
+  # only; createCase validates the chosen channel again.
+  existingSlackChannelCandidates(workspaceId: String!): [SlackChannelCandidate!]!
 
   # caseStatusConfig returns the configurable Case status set (the Kanban
   # columns) for a thread-mode workspace, or null for channel-mode workspaces.

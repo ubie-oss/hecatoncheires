@@ -219,6 +219,41 @@ func TestWorkspaceRegistry_FindByMonitorChannel(t *testing.T) {
 	})
 }
 
+func TestWorkspaceRegistry_IsConfiguredChannel(t *testing.T) {
+	reg := model.NewWorkspaceRegistry()
+	reg.Register(&model.WorkspaceEntry{
+		Workspace:               model.Workspace{ID: "channel-ws"},
+		CaseMode:                model.CaseModeChannel,
+		SlackWorkspaceChannelID: "C0WORKSPACE",
+	})
+	reg.Register(&model.WorkspaceEntry{
+		Workspace:             model.Workspace{ID: "thread-ws"},
+		CaseMode:              model.CaseModeThread,
+		SlackMonitorChannelID: "C0MONITOR",
+	})
+
+	t.Run("thread-mode monitor channel is configured", func(t *testing.T) {
+		gt.Bool(t, reg.IsConfiguredChannel("C0MONITOR")).True()
+	})
+
+	t.Run("channel-mode workspace channel is configured", func(t *testing.T) {
+		gt.Bool(t, reg.IsConfiguredChannel("C0WORKSPACE")).True()
+	})
+
+	t.Run("unused channel is not configured", func(t *testing.T) {
+		gt.Bool(t, reg.IsConfiguredChannel("C0OTHER")).False()
+	})
+
+	t.Run("empty channel is not configured", func(t *testing.T) {
+		gt.Bool(t, reg.IsConfiguredChannel("")).False()
+	})
+
+	t.Run("nil registry is safe", func(t *testing.T) {
+		var nilReg *model.WorkspaceRegistry
+		gt.Bool(t, nilReg.IsConfiguredChannel("C0MONITOR")).False()
+	})
+}
+
 func TestWorkspaceRegistry_FindByReactionEmoji(t *testing.T) {
 	reg := model.NewWorkspaceRegistry()
 	reg.Register(&model.WorkspaceEntry{

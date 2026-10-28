@@ -297,6 +297,29 @@ func (r *caseRepository) GetBySlackChannelID(ctx context.Context, workspaceID st
 	return nil, nil
 }
 
+func (r *caseRepository) GetBySlackChannelIDs(_ context.Context, workspaceID string, channelIDs []string) (map[string]*model.Case, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	result := make(map[string]*model.Case)
+	wanted := make(map[string]struct{}, len(channelIDs))
+	for _, id := range channelIDs {
+		wanted[id] = struct{}{}
+	}
+	for _, c := range r.cases[workspaceID] {
+		if c.SlackChannelID == "" {
+			continue
+		}
+		if _, ok := wanted[c.SlackChannelID]; !ok {
+			continue
+		}
+		if _, dup := result[c.SlackChannelID]; !dup {
+			result[c.SlackChannelID] = copyCase(c)
+		}
+	}
+	return result, nil
+}
+
 func (r *caseRepository) GetBySlackThread(_ context.Context, workspaceID string, channelID string, threadTS string) (*model.Case, error) {
 	if channelID == "" || threadTS == "" {
 		return nil, nil

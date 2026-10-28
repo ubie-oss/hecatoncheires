@@ -45,6 +45,29 @@ test.describe('Case Management', () => {
     expect(exists).toBeTruthy();
   });
 
+  // config.test.toml sets [slack] allow_existing_channel = true, but the E2E
+  // backend runs without a Slack bot token, so the server reports the feature as
+  // unavailable and the create form must keep the plain new-channel flow.
+  // Linking an existing channel itself needs the Slack API (conversations.info /
+  // members / join), so it is covered by the usecase and Vitest tests instead.
+  test('should keep the existing-channel choice hidden without Slack and still create a case', async ({ page }) => {
+    const caseListPage = new CaseListPage(page);
+    const caseFormPage = new CaseFormPage(page);
+
+    await caseListPage.clickNewCaseButton();
+    await caseFormPage.waitForFormVisible();
+    await expect(page.getByTestId('private-case-checkbox')).toBeVisible();
+    expect(await caseFormPage.isChannelSourceVisible()).toBeFalsy();
+
+    await caseFormPage.createCase({
+      title: 'E2E No Existing Channel Choice',
+      customFields: { category: 'bug' },
+    });
+
+    await caseListPage.fillSearchFilter('E2E No Existing Channel Choice');
+    expect(await caseListPage.caseExists('E2E No Existing Channel Choice')).toBeTruthy();
+  });
+
   test('should view case details', async ({ page }) => {
     const caseListPage = new CaseListPage(page);
     const caseFormPage = new CaseFormPage(page);

@@ -150,6 +150,18 @@ export const CREATE_CASE = gql`
   }
 `
 
+// Channels the acting user may link a new case to. Always fetched from the
+// network: membership and links change between two openings of the form.
+export const GET_EXISTING_SLACK_CHANNEL_CANDIDATES = gql`
+  query GetExistingSlackChannelCandidates($workspaceId: String!) {
+    existingSlackChannelCandidates(workspaceId: $workspaceId) {
+      id
+      name
+      isPrivate
+    }
+  }
+`
+
 export const UPDATE_CASE = gql`
   ${CASE_MUTATION_FIELDS}
   mutation UpdateCase($workspaceId: String!, $input: UpdateCaseInput!) {

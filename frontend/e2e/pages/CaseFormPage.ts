@@ -120,6 +120,15 @@ export class CaseFormPage extends BasePage {
   }
 
   /**
+   * True when the "Slack channel" new / existing choice is present. It is
+   * rendered only when the workspace allows linking an existing channel AND the
+   * server has Slack configured.
+   */
+  async isChannelSourceVisible(): Promise<boolean> {
+    return await this.page.getByTestId('case-channel-source').isVisible();
+  }
+
+  /**
    * Fill a custom field by field ID
    * Automatically detects if it's a select or input field
    */

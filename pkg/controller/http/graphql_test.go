@@ -29,6 +29,7 @@ import (
 	"github.com/m-mizutani/hecatoncheires/pkg/domain/model/config"
 	"github.com/m-mizutani/hecatoncheires/pkg/domain/types"
 	"github.com/m-mizutani/hecatoncheires/pkg/repository/memory"
+	slacksvc "github.com/m-mizutani/hecatoncheires/pkg/service/slack"
 	"github.com/m-mizutani/hecatoncheires/pkg/usecase"
 	jobagent "github.com/m-mizutani/hecatoncheires/pkg/usecase/agent/job"
 	jobruntime "github.com/m-mizutani/hecatoncheires/pkg/usecase/job"
@@ -6348,4 +6349,201 @@ func TestGraphQLHandler_FieldValueDisplay(t *testing.T) {
 	gt.Value(t, ch.Value).Equal("C0123ABCD")
 	gt.Value(t, ch.Display).NotNil().Required()
 	gt.Value(t, *ch.Display.Label).Equal("#general")
+}
+
+// existingChannelSlack answers the Slack calls of the existing-channel create
+// flow from fixed tables; every other Service method is the no-op command mock.
+type existingChannelSlack struct {
+	mockSlackServiceForCommand
+	channels     map[string]*slacksvc.ChannelInfo
+	members      map[string][]string
+	userChannels []slacksvc.Channel
+	listCalls    int
+}
+
+func (s *existingChannelSlack) GetChannelInfo(_ context.Context, channelID string) (*slacksvc.ChannelInfo, error) {
+	info, ok := s.channels[channelID]
+	if !ok {
+		return nil, slacksvc.ErrChannelUnavailable
+	}
+	return info, nil
+}
+
+func (s *existingChannelSlack) GetConversationMembers(_ context.Context, channelID string) ([]string, error) {
+	return s.members[channelID], nil
+}
+
+func (s *existingChannelSlack) ListMemberChannels(_ context.Context, _, _ string) ([]slacksvc.Channel, error) {
+	s.listCalls++
+	return s.userChannels, nil
+}
+
+// TestGraphQLHandler_ExistingSlackChannel drives the existing-channel feature
+// through the GraphQL wiring serve.go uses: the flag on fieldConfiguration,
+// createCase with existingSlackChannelID, the isPrivate input-shape check, and
+// the candidate query behind the workspace access middleware.
+func TestGraphQLHandler_ExistingSlackChannel(t *testing.T) {
+	const (
+		wsOn     = "ws-on"
+		wsOff    = "ws-off"
+		wsDenied = "ws-denied"
+		user     = "U0ALICE"
+	)
+	repo := memory.New()
+	ctx := context.Background()
+	seedSlackUsersHTTP(t, repo, user)
+
+	registry := model.NewWorkspaceRegistry()
+	for _, ws := range []struct {
+		id    string
+		allow bool
+	}{{wsOn, true}, {wsOff, false}, {wsDenied, true}} {
+		registry.Register(&model.WorkspaceEntry{
+			Workspace:                 model.Workspace{ID: ws.id, Name: ws.id},
+			FieldSchema:               &config.FieldSchema{Labels: config.EntityLabels{Case: "Case"}},
+			CaseMode:                  model.CaseModeChannel,
+			AllowExistingSlackChannel: ws.allow,
+		})
+	}
+
+	slackFake := &existingChannelSlack{
+		channels: map[string]*slacksvc.ChannelInfo{
+			"C-PUBLIC":  {ID: "C-PUBLIC", Name: "incident-db", IsMember: true},
+			"G-PRIVATE": {ID: "G-PRIVATE", Name: "incident-payroll", IsPrivate: true, IsMember: true},
+		},
+		members: map[string][]string{
+			"C-PUBLIC":  {user},
+			"G-PRIVATE": {user},
+		},
+		userChannels: []slacksvc.Channel{{ID: "C-PUBLIC", Name: "incident-db"}},
+	}
+	access := newDenyingWorkspaceAccess(t, registry, wsDenied)
+	uc := usecase.New(repo, registry,
+		usecase.WithLLMClient(&gollemmock.LLMClientMock{}),
+		usecase.WithSlackService(slackFake),
+		usecase.WithWorkspaceAccess(access))
+	srv := handler.NewDefaultServer(gqlctrl.NewExecutableSchema(gqlctrl.Config{Resolvers: gqlctrl.NewResolver(repo, uc)}))
+	srv.AroundFields(gqlctrl.WorkspaceAccessMiddleware(uc.WorkspaceAccess))
+	srv.SetErrorPresenter(func(ctx context.Context, err error) *gqlerror.Error {
+		gqlErr := graphql.DefaultErrorPresenter(ctx, err)
+		if gqlErr.Extensions == nil {
+			gqlErr.Extensions = map[string]any{}
+		}
+		maps.Copy(gqlErr.Extensions, gqlctrl.ErrorExtensions(err))
+		return gqlErr
+	})
+	h, err := httpctrl.New(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := gqlctrl.WithDataLoaders(r.Context(), gqlctrl.NewDataLoaders(repo, slackFake, uc))
+		srv.ServeHTTP(w, r.WithContext(ctx))
+	}))
+	gt.NoError(t, err).Required()
+
+	createMutation := `mutation($workspaceId: String!, $input: CreateCaseInput!) {
+		createCase(workspaceId: $workspaceId, input: $input) { id slackChannelID isPrivate }
+	}`
+	type createdCase struct {
+		CreateCase struct {
+			SlackChannelID string `json:"slackChannelID"`
+			IsPrivate      bool   `json:"isPrivate"`
+		} `json:"createCase"`
+	}
+	caseCount := func(ws string) int {
+		cases, err := repo.Case().List(ctx, ws)
+		gt.NoError(t, err).Required()
+		return len(cases)
+	}
+
+	t.Run("fieldConfiguration reports whether the workspace allows it", func(t *testing.T) {
+		query := `query($workspaceId: String!) { fieldConfiguration(workspaceId: $workspaceId) { allowExistingSlackChannel } }`
+		for ws, want := range map[string]bool{wsOn: true, wsOff: false} {
+			resp := parseGraphQLResponse(t, executeGraphQLRequestWithAuth(t, h, query, map[string]any{"workspaceId": ws}, user))
+			gt.Array(t, resp.Errors).Length(0).Required()
+			var data struct {
+				FieldConfiguration struct {
+					AllowExistingSlackChannel bool `json:"allowExistingSlackChannel"`
+				} `json:"fieldConfiguration"`
+			}
+			gt.NoError(t, json.Unmarshal(resp.Data, &data)).Required()
+			gt.Value(t, data.FieldConfiguration.AllowExistingSlackChannel).Equal(want)
+		}
+	})
+
+	t.Run("createCase links the existing channel", func(t *testing.T) {
+		resp := parseGraphQLResponse(t, executeGraphQLRequestWithAuth(t, h, createMutation, map[string]any{
+			"workspaceId": wsOn,
+			"input":       map[string]any{"title": "Linked", "existingSlackChannelID": "C-PUBLIC"},
+		}, user))
+		gt.Array(t, resp.Errors).Length(0).Required()
+		var data createdCase
+		gt.NoError(t, json.Unmarshal(resp.Data, &data)).Required()
+		gt.Value(t, data.CreateCase.SlackChannelID).Equal("C-PUBLIC")
+		gt.Bool(t, data.CreateCase.IsPrivate).False()
+	})
+
+	t.Run("a private channel makes a private case", func(t *testing.T) {
+		resp := parseGraphQLResponse(t, executeGraphQLRequestWithAuth(t, h, createMutation, map[string]any{
+			"workspaceId": wsOn,
+			"input":       map[string]any{"title": "Private linked", "existingSlackChannelID": "G-PRIVATE"},
+		}, user))
+		gt.Array(t, resp.Errors).Length(0).Required()
+		var data createdCase
+		gt.NoError(t, json.Unmarshal(resp.Data, &data)).Required()
+		gt.Value(t, data.CreateCase.SlackChannelID).Equal("G-PRIVATE")
+		gt.Bool(t, data.CreateCase.IsPrivate).True()
+	})
+
+	t.Run("isPrivate with an existing channel is rejected whatever its value", func(t *testing.T) {
+		before := caseCount(wsOn)
+		for _, isPrivate := range []bool{true, false} {
+			resp := parseGraphQLResponse(t, executeGraphQLRequestWithAuth(t, h, createMutation, map[string]any{
+				"workspaceId": wsOn,
+				"input":       map[string]any{"title": "Rejected", "existingSlackChannelID": "C-PUBLIC", "isPrivate": isPrivate},
+			}, user))
+			gt.Value(t, errorCodes(resp)).Equal([]string{gqlctrl.ErrCodeBadUserInput})
+		}
+		gt.Number(t, caseCount(wsOn)).Equal(before)
+	})
+
+	t.Run("an already linked channel is SLACK_CHANNEL_ALREADY_LINKED", func(t *testing.T) {
+		before := caseCount(wsOn)
+		resp := parseGraphQLResponse(t, executeGraphQLRequestWithAuth(t, h, createMutation, map[string]any{
+			"workspaceId": wsOn,
+			"input":       map[string]any{"title": "Duplicate", "existingSlackChannelID": "C-PUBLIC"},
+		}, user))
+		gt.Value(t, errorCodes(resp)).Equal([]string{gqlctrl.ErrCodeSlackChannelLinked})
+		gt.Number(t, caseCount(wsOn)).Equal(before)
+	})
+
+	t.Run("a disabled workspace rejects existingSlackChannelID", func(t *testing.T) {
+		resp := parseGraphQLResponse(t, executeGraphQLRequestWithAuth(t, h, createMutation, map[string]any{
+			"workspaceId": wsOff,
+			"input":       map[string]any{"title": "Off", "existingSlackChannelID": "C-OTHER"},
+		}, user))
+		gt.Value(t, errorCodes(resp)).Equal([]string{gqlctrl.ErrCodeBadUserInput})
+		gt.Number(t, caseCount(wsOff)).Equal(0)
+	})
+
+	t.Run("candidates are FORBIDDEN in a denied workspace and listed in an allowed one", func(t *testing.T) {
+		query := `query($workspaceId: String!) { existingSlackChannelCandidates(workspaceId: $workspaceId) { id name isPrivate } }`
+		before := slackFake.listCalls
+		resp := parseGraphQLResponse(t, executeGraphQLRequestWithAuth(t, h, query, map[string]any{"workspaceId": wsDenied}, user))
+		gt.Value(t, errorCodes(resp)).Equal([]string{gqlctrl.ErrCodeForbidden})
+		gt.Number(t, slackFake.listCalls).Equal(before)
+
+		// C-PUBLIC is linked by the earlier subtest, so add an unlinked one.
+		slackFake.userChannels = append(slackFake.userChannels, slacksvc.Channel{ID: "C-FREE", Name: "free"})
+		resp = parseGraphQLResponse(t, executeGraphQLRequestWithAuth(t, h, query, map[string]any{"workspaceId": wsOn}, user))
+		gt.Array(t, resp.Errors).Length(0).Required()
+		var data struct {
+			Candidates []struct {
+				ID        string `json:"id"`
+				Name      string `json:"name"`
+				IsPrivate bool   `json:"isPrivate"`
+			} `json:"existingSlackChannelCandidates"`
+		}
+		gt.NoError(t, json.Unmarshal(resp.Data, &data)).Required()
+		gt.Array(t, data.Candidates).Length(1).Required()
+		gt.Value(t, data.Candidates[0].ID).Equal("C-FREE")
+		gt.Value(t, data.Candidates[0].Name).Equal("free")
+	})
 }

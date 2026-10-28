@@ -152,14 +152,16 @@ func statusForExtensionCode(code string) int {
 	case gqlctrl.ErrCodeBadUserInput,
 		gqlctrl.ErrCodeMissingRequiredFields,
 		gqlctrl.ErrCodeTitleRequired,
-		gqlctrl.ErrCodeFieldValidationFailed:
+		gqlctrl.ErrCodeFieldValidationFailed,
+		gqlctrl.ErrCodeSlackChannelNotLinkable:
 		return http.StatusBadRequest
 	case gqlctrl.ErrCodeNotFound:
 		return http.StatusNotFound
 	case gqlctrl.ErrCodeForbidden:
 		return http.StatusForbidden
 	case gqlctrl.ErrCodeConflict,
-		gqlctrl.ErrCodeInvalidStatusTransition:
+		gqlctrl.ErrCodeInvalidStatusTransition,
+		gqlctrl.ErrCodeSlackChannelLinked:
 		return http.StatusConflict
 	case gqlctrl.ErrCodeUnauthenticated:
 		return http.StatusUnauthorized

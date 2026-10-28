@@ -316,6 +316,121 @@ func TestGetChannelNames_ReportsFailuresOtherThanUnavailableChannels(t *testing.
 	gt.Bool(t, strings.Contains(out, `"C4"`)).False()
 }
 
+func TestListMemberChannels(t *testing.T) {
+	var requests []url.Values
+	rateLimitedOnce := false
+	mux := http.NewServeMux()
+	mux.HandleFunc("/users.conversations", func(w http.ResponseWriter, r *http.Request) {
+		gt.NoError(t, r.ParseForm()).Required()
+		if !rateLimitedOnce {
+			rateLimitedOnce = true
+			w.Header().Set("Retry-After", "0")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		requests = append(requests, r.Form)
+		w.Header().Set("Content-Type", "application/json")
+		if r.Form.Get("cursor") == "" {
+			_, _ = w.Write([]byte(`{"ok":true,"channels":[{"id":"C1","name":"general","is_private":false}],"response_metadata":{"next_cursor":"next-page"}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"ok":true,"channels":[{"id":"G2","name":"incident-payroll","is_private":true}],"response_metadata":{"next_cursor":""}}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	svc, err := slack.NewWithAPIURLForTest("xoxb-test", srv.URL+"/")
+	gt.NoError(t, err).Required()
+
+	channels, err := svc.ListMemberChannels(context.Background(), "U_ACTOR", "T_TEAM")
+	gt.NoError(t, err).Required()
+	gt.Value(t, channels).Equal([]slack.Channel{
+		{ID: "C1", Name: "general", IsPrivate: false},
+		{ID: "G2", Name: "incident-payroll", IsPrivate: true},
+	})
+
+	// The rate-limited attempt is retried, then two pages are fetched.
+	gt.Bool(t, rateLimitedOnce).True()
+	gt.Array(t, requests).Length(2).Required()
+	for _, form := range requests {
+		gt.String(t, form.Get("user")).Equal("U_ACTOR")
+		gt.String(t, form.Get("team_id")).Equal("T_TEAM")
+		gt.String(t, form.Get("types")).Equal("public_channel,private_channel")
+		gt.String(t, form.Get("exclude_archived")).Equal("true")
+	}
+	gt.String(t, requests[1].Get("cursor")).Equal("next-page")
+}
+
+func TestGetChannelInfo_ClassifiesUnavailableChannels(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/conversations.info", func(w http.ResponseWriter, r *http.Request) {
+		gt.NoError(t, r.ParseForm()).Required()
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Form.Get("channel") {
+		case "C_OK":
+			_, _ = w.Write([]byte(`{"ok":true,"channel":{"id":"C_OK","name":"general","is_private":true,"is_member":true}}`))
+		case "C_GONE":
+			_, _ = w.Write([]byte(`{"ok":false,"error":"channel_not_found"}`))
+		default:
+			_, _ = w.Write([]byte(`{"ok":false,"error":"internal_error"}`))
+		}
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	svc, err := slack.NewWithAPIURLForTest("xoxb-test", srv.URL+"/")
+	gt.NoError(t, err).Required()
+	ctx := context.Background()
+
+	t.Run("maps is_private and is_member", func(t *testing.T) {
+		info, err := svc.GetChannelInfo(ctx, "C_OK")
+		gt.NoError(t, err).Required()
+		gt.Bool(t, info.IsPrivate).True()
+		gt.Bool(t, info.IsMember).True()
+	})
+
+	t.Run("channel_not_found is ErrChannelUnavailable", func(t *testing.T) {
+		_, err := svc.GetChannelInfo(ctx, "C_GONE")
+		gt.Error(t, err).Is(slack.ErrChannelUnavailable)
+	})
+
+	t.Run("other Slack errors are not ErrChannelUnavailable", func(t *testing.T) {
+		_, err := svc.GetChannelInfo(ctx, "C_BROKEN")
+		gt.Value(t, err).NotNil().Required()
+		gt.Bool(t, errors.Is(err, slack.ErrChannelUnavailable)).False()
+	})
+}
+
+func TestJoinChannel(t *testing.T) {
+	var joined []string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/conversations.join", func(w http.ResponseWriter, r *http.Request) {
+		gt.NoError(t, r.ParseForm()).Required()
+		channel := r.Form.Get("channel")
+		joined = append(joined, channel)
+		w.Header().Set("Content-Type", "application/json")
+		switch channel {
+		case "C_NEW":
+			_, _ = w.Write([]byte(`{"ok":true,"channel":{"id":"C_NEW"}}`))
+		case "C_ALREADY":
+			_, _ = w.Write([]byte(`{"ok":true,"channel":{"id":"C_ALREADY"},"warning":"already_in_channel","response_metadata":{"warnings":["already_in_channel"]}}`))
+		default:
+			_, _ = w.Write([]byte(`{"ok":false,"error":"method_not_supported_for_channel_type"}`))
+		}
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	svc, err := slack.NewWithAPIURLForTest("xoxb-test", srv.URL+"/")
+	gt.NoError(t, err).Required()
+	ctx := context.Background()
+
+	gt.NoError(t, svc.JoinChannel(ctx, "C_NEW"))
+	gt.NoError(t, svc.JoinChannel(ctx, "C_ALREADY"))
+	gt.Value(t, svc.JoinChannel(ctx, "G_PRIVATE")).NotNil()
+	gt.Value(t, joined).Equal([]string{"C_NEW", "C_ALREADY", "G_PRIVATE"})
+}
+
 func TestInviteUsersToChannel_BadUserDoesNotBlockValidUsers(t *testing.T) {
 	fake := &inviteFake{
 		failingUsers: map[string]string{

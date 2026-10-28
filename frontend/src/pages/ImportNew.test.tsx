@@ -41,6 +41,7 @@ function fieldConfigMock(): MockedResponse {
           fields: [],
           labels: { case: 'Case' },
           actionConfig: { initial: 'BACKLOG', closed: ['COMPLETED'], statuses: [] },
+          allowExistingSlackChannel: false,
         },
       },
     },

@@ -127,6 +127,32 @@ The notification is best-effort: a Slack failure is reported server-side and nev
 - `bulkArchiveCases(workspaceId, ids: [Int!]!): [Int!]!` / `bulkUnarchiveCases(...)` — the archiving is dispatched asynchronously and the call returns immediately with the **accepted ids**. Ids that went stale between the selection and the write are skipped rather than failing the batch: already archived, no longer CLOSED because someone reopened them, or deleted in the meantime. An access denial is **not** skipped — it aborts the batch and is reported server-side, because it is the one outcome an operator needs to see.
 - All four require an authenticated user, checked synchronously before any work starts; each id is then checked against the Case's private-access rules.
 
+## Linking a new Case to an existing Slack channel (Web UI)
+
+By default a channel-mode Case gets a new Slack channel of its own. When the
+workspace sets `[slack] allow_existing_channel = true` (see
+[Configuration → Linking an existing channel](configuration.md#linking-an-existing-channel)),
+the **New case** form shows a **Slack channel** choice:
+
+1. Choose **Use an existing channel**. The channel list is loaded at this point.
+2. Type part of the channel name to narrow the list, then pick one channel.
+   The list shows channels you have joined; a private channel appears only when
+   the bot has been invited to it. Channels already linked to a Case are not
+   listed.
+3. The form shows whether the Case will be private: it follows the channel (a
+   private channel makes a private Case), so the **Private case** checkbox is
+   hidden. Switching back to **Create a new channel** restores the checkbox as
+   you left it.
+4. Press **Create**. If the bot is not in the (public) channel yet, it joins it.
+
+**Save as draft** is disabled while an existing channel is chosen. If the
+channel was linked to another Case in the meantime, cannot be used any more, or
+the bot could not join it, the form shows the reason under the channel picker
+and reloads the list.
+
+This choice exists only on the Web form; the Slack slash-command modal, mention
+proposals and agent tools always create a new channel.
+
 ## Creating a Case in Slack (Slash → modal)
 
 Slack slash commands let users create and edit cases directly from Slack without opening the web UI. The slash command behaves differently depending on the channel context:

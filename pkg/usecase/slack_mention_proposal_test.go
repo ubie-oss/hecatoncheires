@@ -971,6 +971,12 @@ func (m *collectorOnlyMockSlack) PostEphemeralBlocks(_ context.Context, channelI
 func (m *collectorOnlyMockSlack) ListJoinedChannels(context.Context, string) ([]slacksvc.Channel, error) {
 	return nil, nil
 }
+func (m *collectorOnlyMockSlack) ListMemberChannels(context.Context, string, string) ([]slacksvc.Channel, error) {
+	return nil, nil
+}
+func (m *collectorOnlyMockSlack) JoinChannel(context.Context, string) error {
+	return nil
+}
 func (m *collectorOnlyMockSlack) GetChannelNames(context.Context, []string) (map[string]string, error) {
 	return nil, nil
 }

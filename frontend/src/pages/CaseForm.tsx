@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router'
 import { useMutation, useQuery } from '@apollo/client'
 import UserSelect from '../components/UserSelect'
+import ExistingSlackChannelSelect, { type SlackChannelCandidate } from '../components/ExistingSlackChannelSelect'
 import { CREATE_CASE, UPDATE_CASE, ASSIGN_CASE, UNASSIGN_CASE, GET_CASE, GET_CASES } from '../graphql/case'
 import { CREATE_DRAFT, SUBMIT_DRAFT, GET_DRAFTS } from '../graphql/drafts'
 import { diffAssignees } from '../utils/assignees'
@@ -30,6 +31,14 @@ interface CaseItem {
   // the regular Edit-an-existing-OPEN-case behaviour.
   status?: 'DRAFT' | 'OPEN' | 'CLOSED'
 }
+
+// GraphQL extensions.code values the create mutation returns when the chosen
+// existing channel is rejected; each is shown under the channel picker.
+const existingChannelErrorKeys = {
+  SLACK_CHANNEL_ALREADY_LINKED: 'errorChannelAlreadyLinked',
+  SLACK_CHANNEL_NOT_LINKABLE: 'errorChannelNotLinkable',
+  SLACK_CHANNEL_JOIN_FAILED: 'errorChannelJoinFailed',
+} as const
 
 interface CaseFormProps {
   caseItem: CaseItem | null
@@ -76,11 +85,21 @@ export default function CaseForm({ caseItem, onClose, onSubmitted }: CaseFormPro
     return map
   })
   const [errors, setErrors] = useState<Record<string, string>>({})
+  // Where the new case's Slack channel comes from. 'existing' links a channel
+  // the user picks; its privacy then follows the channel, so the private
+  // toggle is hidden and isPrivate is not sent. isPrivate keeps its value so
+  // switching back to 'new' restores what the user had chosen.
+  const [channelSource, setChannelSource] = useState<'new' | 'existing'>('new')
+  const [existingChannel, setExistingChannel] = useState<SlackChannelCandidate | null>(null)
+  const [candidatesRefetchKey, setCandidatesRefetchKey] = useState(0)
 
   const { data: configData } = useQuery(GET_FIELD_CONFIGURATION, {
     variables: { workspaceId: currentWorkspace?.id },
     skip: !currentWorkspace,
   })
+  const showChannelSource =
+    !isEdit && showPrivateToggle && !!configData?.fieldConfiguration?.allowExistingSlackChannel
+  const usingExistingChannel = showChannelSource && channelSource === 'existing'
   const { users } = useAssigneeCandidates(currentWorkspace?.id)
 
   const [createCase, { loading: creating }] = useMutation(CREATE_CASE, {
@@ -159,6 +178,7 @@ export default function CaseForm({ caseItem, onClose, onSubmitted }: CaseFormPro
         errs[f.id] = t('errorFieldRequired', { fieldName: f.name })
       }
     })
+    if (usingExistingChannel && !existingChannel) errs.existingChannel = t('errorSelectChannel')
     if (Object.keys(errs).length > 0) { setErrors(errs); return }
 
     const fieldArr = collectFieldArr()
@@ -200,23 +220,27 @@ export default function CaseForm({ caseItem, onClose, onSubmitted }: CaseFormPro
         await reconcileAssignees(caseItem.id)
         onClose()
       } else {
+        const common = { title, description, isTest, assigneeIDs, fields: fieldArr }
         await createCase({
           variables: {
             workspaceId: currentWorkspace!.id,
-            input: {
-              title,
-              description,
-              isPrivate,
-              isTest,
-              assigneeIDs,
-              fields: fieldArr,
-            },
+            input: usingExistingChannel && existingChannel
+              ? { ...common, existingSlackChannelID: existingChannel.id }
+              : { ...common, isPrivate },
           },
         })
         onClose()
       }
     } catch (e: any) {
       console.error('Case mutation failed', e)
+      const code = e?.graphQLErrors?.[0]?.extensions?.code as keyof typeof existingChannelErrorKeys | undefined
+      if (usingExistingChannel && code && code in existingChannelErrorKeys) {
+        setErrors({ existingChannel: t(existingChannelErrorKeys[code], { caseLabelLower: caseLabel.toLowerCase() }) })
+        // The chosen channel may have been taken or become unusable; drop it
+        // from the list by fetching the candidates again.
+        setCandidatesRefetchKey((k) => k + 1)
+        return
+      }
       const msg = e?.graphQLErrors?.[0]?.message || e?.message || String(e)
       setErrors({ submit: msg })
     }
@@ -317,7 +341,7 @@ export default function CaseForm({ caseItem, onClose, onSubmitted }: CaseFormPro
             <Button
               variant="ghost"
               onClick={handleSaveAsDraft}
-              disabled={busy}
+              disabled={busy || usingExistingChannel}
               data-testid="case-save-as-draft-button"
             >
               {savingDraft ? t('btnSavingDraft') : t('btnSaveAsDraft')}
@@ -416,7 +440,55 @@ export default function CaseForm({ caseItem, onClose, onSubmitted }: CaseFormPro
             </div>
           </div>
         </label>
-        {!isEdit && showPrivateToggle && (
+        {showChannelSource && (
+          <div data-testid="case-channel-source">
+            <div className="field-label">{t('labelSlackChannel')}</div>
+            <div className="col" style={{ gap: 6 }}>
+              <label className="row" style={{ gap: 8, fontSize: 13, cursor: 'pointer' }}>
+                <input
+                  type="radio"
+                  name="case-channel-source"
+                  checked={channelSource === 'new'}
+                  onChange={() => {
+                    setChannelSource('new')
+                    setErrors((p) => ({ ...p, existingChannel: '' }))
+                  }}
+                  data-testid="case-channel-source-new"
+                />
+                {t('optionCreateNewChannel')}
+              </label>
+              <label className="row" style={{ gap: 8, fontSize: 13, cursor: 'pointer' }}>
+                <input
+                  type="radio"
+                  name="case-channel-source"
+                  checked={channelSource === 'existing'}
+                  onChange={() => setChannelSource('existing')}
+                  data-testid="case-channel-source-existing"
+                />
+                {t('optionUseExistingChannel')}
+              </label>
+            </div>
+            {usingExistingChannel && currentWorkspace && (
+              <div style={{ marginTop: 8 }}>
+                <ExistingSlackChannelSelect
+                  workspaceId={currentWorkspace.id}
+                  value={existingChannel}
+                  onChange={(c) => {
+                    setExistingChannel(c)
+                    setErrors((p) => ({ ...p, existingChannel: '' }))
+                  }}
+                  caseLabelLower={caseLabel.toLowerCase()}
+                  error={errors.existingChannel || undefined}
+                  refetchKey={candidatesRefetchKey}
+                />
+                <div style={{ fontSize: 11.5, color: 'var(--fg-muted)', marginTop: 4 }} data-testid="case-draft-unavailable-hint">
+                  {t('hintDraftUnavailableWithExistingChannel')}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+        {!isEdit && showPrivateToggle && !usingExistingChannel && (
           <label className="row" style={{ gap: 8, padding: 10, border: '1px solid color-mix(in oklch, var(--warn) 30%, var(--line))', borderRadius: 6, background: 'color-mix(in oklch, var(--warn) 8%, transparent)', alignItems: 'flex-start', cursor: 'pointer' }}>
             <input
               type="checkbox"

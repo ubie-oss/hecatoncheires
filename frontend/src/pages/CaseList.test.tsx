@@ -56,6 +56,7 @@ function fieldConfigMock(workspaceId: string, fields: FieldDef[] = []): MockedRe
             closed: ['COMPLETED'],
             statuses: [],
           },
+          allowExistingSlackChannel: false,
         },
       },
     },

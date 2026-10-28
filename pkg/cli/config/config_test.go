@@ -2654,6 +2654,68 @@ type = "text"
 	})
 }
 
+// TestLoadWorkspaceConfigs_AllowExistingChannel tests [slack]
+// allow_existing_channel: off by default, carried to the registry entry when
+// set in channel mode, and dropped for a thread-mode workspace.
+func TestLoadWorkspaceConfigs_AllowExistingChannel(t *testing.T) {
+	writeAndLoad := func(t *testing.T, content string) []*config.WorkspaceConfig {
+		t.Helper()
+		configPath := filepath.Join(t.TempDir(), "config.toml")
+		gt.NoError(t, os.WriteFile(configPath, []byte(content), 0644)).Required()
+		configs, err := config.LoadWorkspaceConfigs([]string{configPath})
+		gt.NoError(t, err).Required()
+		gt.Array(t, configs).Length(1).Required()
+		return configs
+	}
+
+	t.Run("omitted means disabled", func(t *testing.T) {
+		configs := writeAndLoad(t, `
+[workspace]
+id = "risk"
+`)
+		gt.Bool(t, configs[0].AllowExistingSlackChannel).False()
+		entry, err := config.BuildWorkspaceRegistry(configs).Get("risk")
+		gt.NoError(t, err).Required()
+		gt.Bool(t, entry.AllowExistingSlackChannel).False()
+	})
+
+	t.Run("true in channel mode reaches the registry entry", func(t *testing.T) {
+		configs := writeAndLoad(t, `
+[workspace]
+id = "risk"
+
+[slack]
+allow_existing_channel = true
+`)
+		gt.Bool(t, configs[0].AllowExistingSlackChannel).True()
+		entry, err := config.BuildWorkspaceRegistry(configs).Get("risk")
+		gt.NoError(t, err).Required()
+		gt.Bool(t, entry.AllowExistingSlackChannel).True()
+	})
+
+	t.Run("true in thread mode is ignored", func(t *testing.T) {
+		configs := writeAndLoad(t, `
+[workspace]
+id = "support"
+
+[slack]
+mode = "thread"
+channel = "C0123ABC"
+allow_existing_channel = true
+
+[case]
+initial = "TRIAGE"
+  [[case.status]]
+  id = "TRIAGE"
+  name = "Triage"
+`)
+		gt.Bool(t, configs[0].AllowExistingSlackChannel).False()
+		entry, err := config.BuildWorkspaceRegistry(configs).Get("support")
+		gt.NoError(t, err).Required()
+		gt.Bool(t, entry.AllowExistingSlackChannel).False()
+	})
+}
+
 // TestLoadWorkspaceConfigs_WorkspaceChannel tests the [slack] workspace_channel
 // field: channel-mode-only, must be a Slack channel ID, and unique across
 // workspaces (both against other workspace_channel values and monitored

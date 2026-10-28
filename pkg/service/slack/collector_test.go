@@ -56,6 +56,12 @@ func (f *fakeSlackService) GetPermalink(_ context.Context, channelID, ts string)
 func (f *fakeSlackService) ListJoinedChannels(context.Context, string) ([]slacksvc.Channel, error) {
 	panic("unexpected ListJoinedChannels")
 }
+func (f *fakeSlackService) ListMemberChannels(context.Context, string, string) ([]slacksvc.Channel, error) {
+	panic("unexpected ListMemberChannels")
+}
+func (f *fakeSlackService) JoinChannel(context.Context, string) error {
+	panic("unexpected JoinChannel")
+}
 func (f *fakeSlackService) GetChannelNames(context.Context, []string) (map[string]string, error) {
 	panic("unexpected GetChannelNames")
 }

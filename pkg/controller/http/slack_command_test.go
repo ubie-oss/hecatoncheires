@@ -25,6 +25,12 @@ type mockSlackServiceForCommand struct{}
 func (m *mockSlackServiceForCommand) ListJoinedChannels(_ context.Context, _ string) ([]slacksvc.Channel, error) {
 	return nil, nil
 }
+func (m *mockSlackServiceForCommand) ListMemberChannels(_ context.Context, _, _ string) ([]slacksvc.Channel, error) {
+	return nil, nil
+}
+func (m *mockSlackServiceForCommand) JoinChannel(_ context.Context, _ string) error {
+	return nil
+}
 func (m *mockSlackServiceForCommand) GetChannelNames(_ context.Context, _ []string) (map[string]string, error) {
 	return nil, nil
 }

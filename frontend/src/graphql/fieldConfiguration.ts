@@ -31,6 +31,7 @@ export const GET_FIELD_CONFIGURATION = gql`
           emoji
         }
       }
+      allowExistingSlackChannel
     }
   }
 `

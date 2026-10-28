@@ -24,6 +24,9 @@ const (
 	ErrCodeInvalidStatusTransition = "INVALID_STATUS_TRANSITION"
 	ErrCodeFieldValidationFailed   = "FIELD_VALIDATION_FAILED"
 	ErrCodeActivationFailed        = "ACTIVATION_FAILED"
+	ErrCodeSlackChannelNotLinkable = "SLACK_CHANNEL_NOT_LINKABLE"
+	ErrCodeSlackChannelLinked      = "SLACK_CHANNEL_ALREADY_LINKED"
+	ErrCodeSlackChannelJoinFailed  = "SLACK_CHANNEL_JOIN_FAILED"
 )
 
 // GraphQL extensions field names. Each granular code is allowed to add
@@ -63,6 +66,16 @@ func ErrorCode(err error) string {
 	// SubmitDraft path (errors.Join). It is a user-fixable input error, so it must
 	// classify as BAD_USER_INPUT ahead of the generic ACTIVATION_FAILED below.
 	case errors.Is(err, usecase.ErrCasePrivateThreadModeUnsupported):
+		return ErrCodeBadUserInput
+	// Existing-channel rejections tell the create form which message to show
+	// under the channel picker.
+	case errors.Is(err, usecase.ErrSlackChannelNotLinkable):
+		return ErrCodeSlackChannelNotLinkable
+	case errors.Is(err, usecase.ErrSlackChannelAlreadyLinked):
+		return ErrCodeSlackChannelLinked
+	case errors.Is(err, usecase.ErrSlackChannelJoinFailed):
+		return ErrCodeSlackChannelJoinFailed
+	case errors.Is(err, usecase.ErrExistingSlackChannelDisabled):
 		return ErrCodeBadUserInput
 	case errors.Is(err, usecase.ErrActivationFailed):
 		return ErrCodeActivationFailed
@@ -146,8 +159,9 @@ func errorValues(err error) map[string]any {
 }
 
 // IsClientError reports whether err is a user-fault classification (4xx).
-// Server-fault classifications (ACTIVATION_FAILED, unclassified) return
-// false so the ErrorPresenter logs them at full severity.
+// Server-fault classifications (ACTIVATION_FAILED, SLACK_CHANNEL_JOIN_FAILED,
+// unclassified) return false so the ErrorPresenter logs them at full
+// severity; a failed join can mean the deployment lacks channels:join.
 func IsClientError(err error) bool {
 	switch ErrorCode(err) {
 	case ErrCodeBadUserInput,
@@ -158,7 +172,9 @@ func IsClientError(err error) bool {
 		ErrCodeMissingRequiredFields,
 		ErrCodeTitleRequired,
 		ErrCodeInvalidStatusTransition,
-		ErrCodeFieldValidationFailed:
+		ErrCodeFieldValidationFailed,
+		ErrCodeSlackChannelNotLinkable,
+		ErrCodeSlackChannelLinked:
 		return true
 	}
 	return false

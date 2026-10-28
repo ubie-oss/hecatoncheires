@@ -433,6 +433,8 @@ func buildRegistry(wc *config.WorkspaceConfig) (*model.WorkspaceRegistry, *model
 		CaseMode:              wc.CaseMode,
 		SlackMonitorChannelID: wc.SlackMonitorChannel,
 		CaseStatusSet:         wc.CaseStatusSet,
+
+		AllowExistingSlackChannel: wc.AllowExistingSlackChannel,
 	}
 	registry := model.NewWorkspaceRegistry()
 	registry.Register(entry)

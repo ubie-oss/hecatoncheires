@@ -611,11 +611,21 @@ func failMonitoredThreadAnchor(ctx context.Context, svc slack.Service, entry *mo
 // createCase mutation and the slash-command "submit" flow. The mode decision is
 // delegated to the shared funnel openInWorkspaceMode so every OPEN-case path
 // honours the same invariant.
-func (uc *CaseUseCase) CreateCase(ctx context.Context, workspaceID string, title, description string, assigneeIDs []string, fieldValues map[string]model.FieldValue, isPrivate bool, isTest bool, sourceTeamID string, requestKey string) (*model.Case, error) {
+//
+// WithExistingSlackChannel links the case to an existing channel instead of
+// creating one; see createCaseInExistingSlackChannel.
+func (uc *CaseUseCase) CreateCase(ctx context.Context, workspaceID string, title, description string, assigneeIDs []string, fieldValues map[string]model.FieldValue, isPrivate bool, isTest bool, sourceTeamID string, requestKey string, opts ...CreateCaseOption) (*model.Case, error) {
 	ctx = i18n.ContextWithWorkspaceLang(ctx, uc.workspaceRegistry.Language(workspaceID))
+	var o createCaseOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
+	if o.existingSlackChannelSet {
+		return uc.createCaseInExistingSlackChannel(ctx, workspaceID, title, description, assigneeIDs, fieldValues, isPrivate, isTest, sourceTeamID, requestKey, o.existingSlackChannelID)
+	}
 	return uc.openInWorkspaceMode(ctx, workspaceID, isPrivate, openProducers{
 		Channel: func(ctx context.Context, entry *model.WorkspaceEntry) (*model.Case, error) {
-			return uc.createChannelModeCase(ctx, workspaceID, entry, title, description, assigneeIDs, fieldValues, isPrivate, isTest, sourceTeamID, requestKey)
+			return uc.createChannelModeCase(ctx, workspaceID, entry, title, description, assigneeIDs, fieldValues, isPrivate, isTest, sourceTeamID, requestKey, "")
 		},
 		// Thread-mode cases carry only title / description / fields (+ requestKey
 		// for dedup); the caller's assigneeIDs / isTest / sourceTeamID are
@@ -629,7 +639,9 @@ func (uc *CaseUseCase) CreateCase(ctx context.Context, workspaceID string, title
 // createChannelModeCase persists a brand-new OPEN case and runs channel-mode
 // activation (dedicated Slack channel, invites, welcome, etc.). Extracted from
 // CreateCase so the channel form is one named producer behind the shared funnel.
-func (uc *CaseUseCase) createChannelModeCase(ctx context.Context, workspaceID string, entry *model.WorkspaceEntry, title, description string, assigneeIDs []string, fieldValues map[string]model.FieldValue, isPrivate bool, isTest bool, sourceTeamID string, requestKey string) (*model.Case, error) {
+// existingSlackChannelID is passed through to activateChannelModeCase; empty
+// creates a new channel.
+func (uc *CaseUseCase) createChannelModeCase(ctx context.Context, workspaceID string, entry *model.WorkspaceEntry, title, description string, assigneeIDs []string, fieldValues map[string]model.FieldValue, isPrivate bool, isTest bool, sourceTeamID string, requestKey string, existingSlackChannelID string) (*model.Case, error) {
 	created, err := uc.persistCase(ctx, workspaceID, persistCaseInput{
 		Title:       title,
 		Description: description,
@@ -650,7 +662,7 @@ func (uc *CaseUseCase) createChannelModeCase(ctx context.Context, workspaceID st
 		return created, nil
 	}
 
-	activated, actErr := uc.activateChannelModeCase(ctx, workspaceID, entry, created, sourceTeamID)
+	activated, actErr := uc.activateChannelModeCase(ctx, workspaceID, entry, created, sourceTeamID, existingSlackChannelID)
 	if actErr != nil {
 		// Rollback policy: discard the half-formed case so the whole call appears
 		// atomic. SubmitDraft uses a different policy (status flip back to DRAFT).
@@ -889,7 +901,11 @@ func (uc *CaseUseCase) persistCase(ctx context.Context, workspaceID string, in p
 // entry (may be nil for callers that cannot supply it) is checked so that a
 // mis-routed thread-mode case never reaches CreateChannel — the only place a
 // dedicated channel is provisioned.
-func (uc *CaseUseCase) activateChannelModeCase(ctx context.Context, workspaceID string, entry *model.WorkspaceEntry, c *model.Case, sourceTeamID string) (*model.Case, error) {
+//
+// existingSlackChannelID, when non-empty, is an already-validated channel the
+// case links to instead of a new one: CreateChannel and the cross-workspace
+// connect are skipped, and every later step runs unchanged.
+func (uc *CaseUseCase) activateChannelModeCase(ctx context.Context, workspaceID string, entry *model.WorkspaceEntry, c *model.Case, sourceTeamID string, existingSlackChannelID string) (*model.Case, error) {
 	ctx = i18n.ContextWithWorkspaceLang(ctx, uc.workspaceRegistry.Language(workspaceID))
 	if uc.slackService == nil {
 		return c, nil
@@ -905,25 +921,29 @@ func (uc *CaseUseCase) activateChannelModeCase(ctx context.Context, workspaceID 
 			goerr.V(CaseIDKey, c.ID), goerr.V("workspace_id", workspaceID))
 	}
 
-	prefix := uc.slackChannelPrefixForWorkspace(workspaceID)
-	teamID := uc.slackTeamIDForWorkspace(workspaceID)
-	channelID, err := uc.slackService.CreateChannel(ctx, c.ID, c.Title, prefix, c.IsPrivate, teamID)
-	if err != nil {
-		return nil, goerr.Wrap(err, "failed to create Slack channel for case", goerr.V(CaseIDKey, c.ID))
-	}
+	channelID := existingSlackChannelID
+	if channelID == "" {
+		prefix := uc.slackChannelPrefixForWorkspace(workspaceID)
+		teamID := uc.slackTeamIDForWorkspace(workspaceID)
+		created, err := uc.slackService.CreateChannel(ctx, c.ID, c.Title, prefix, c.IsPrivate, teamID)
+		if err != nil {
+			return nil, goerr.Wrap(err, "failed to create Slack channel for case", goerr.V(CaseIDKey, c.ID))
+		}
+		channelID = created
 
-	// Connect channel to the source workspace if it differs from the configured team.
-	//
-	// Both team IDs must be known: the source team (from the Slack payload) AND
-	// the home team (workspace config, teamID). When the workspace has no
-	// SlackTeamID configured, teamID is empty; without it we cannot build a valid
-	// target_team_ids set, and Slack rejects a request carrying an empty team id
-	// (surfacing as not_an_enterprise on non-Enterprise-Grid workspaces). Skip
-	// rather than fire a call that can only fail.
-	if teamID != "" && sourceTeamID != "" && sourceTeamID != teamID {
-		if uc.slackAdminService != nil {
-			if connectErr := uc.slackAdminService.ConnectChannelToWorkspace(ctx, channelID, []string{teamID, sourceTeamID}); connectErr != nil {
-				errutil.Handle(ctx, connectErr, "failed to connect channel to source workspace")
+		// Connect channel to the source workspace if it differs from the configured team.
+		//
+		// Both team IDs must be known: the source team (from the Slack payload) AND
+		// the home team (workspace config, teamID). When the workspace has no
+		// SlackTeamID configured, teamID is empty; without it we cannot build a valid
+		// target_team_ids set, and Slack rejects a request carrying an empty team id
+		// (surfacing as not_an_enterprise on non-Enterprise-Grid workspaces). Skip
+		// rather than fire a call that can only fail.
+		if teamID != "" && sourceTeamID != "" && sourceTeamID != teamID {
+			if uc.slackAdminService != nil {
+				if connectErr := uc.slackAdminService.ConnectChannelToWorkspace(ctx, channelID, []string{teamID, sourceTeamID}); connectErr != nil {
+					errutil.Handle(ctx, connectErr, "failed to connect channel to source workspace")
+				}
 			}
 		}
 	}
@@ -986,6 +1006,7 @@ func (uc *CaseUseCase) activateChannelModeCase(ctx context.Context, workspaceID 
 	if err != nil {
 		return nil, goerr.Wrap(err, "failed to update case with Slack channel ID",
 			goerr.V("orphaned_channel_id", channelID),
+			goerr.V("existing_channel", existingSlackChannelID != ""),
 			goerr.V(CaseIDKey, c.ID))
 	}
 	return updated, nil
@@ -2358,7 +2379,7 @@ func (uc *CaseUseCase) SubmitDraft(ctx context.Context, workspaceID string, id i
 	// to a freshly-posted monitored-channel thread and never creates a channel.
 	activated, actErr := uc.openInWorkspaceMode(ctx, workspaceID, updated.IsPrivate, openProducers{
 		Channel: func(ctx context.Context, entry *model.WorkspaceEntry) (*model.Case, error) {
-			return uc.activateChannelModeCase(ctx, workspaceID, entry, updated, "")
+			return uc.activateChannelModeCase(ctx, workspaceID, entry, updated, "", "")
 		},
 		Thread: func(ctx context.Context, entry *model.WorkspaceEntry) (*model.Case, error) {
 			rootTS, err := postMonitoredThreadAnchor(ctx, uc.slackService, entry)

@@ -92,6 +92,7 @@ function supportingMocks(fieldDefs: unknown[] = []): MockedResponse[] {
               closed: ['COMPLETED'],
               statuses: [],
             },
+            allowExistingSlackChannel: false,
           },
         },
       },

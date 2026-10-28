@@ -85,6 +85,7 @@ Then start the server:
    - **Bot Token Scopes**:
      - `bookmarks:write` (to add bookmarks to case channels)
      - `channels:history` (to receive message events from public channels via Events API)
+     - `channels:join` (optional — required only when a workspace sets `[slack] allow_existing_channel = true`; lets the bot join the existing public channel a new case is linked to. Re-install the app after adding this scope.)
      - `channels:manage` (to create, rename, and invite users to public channels)
      - `channels:read` (to list and read channel information, and receive membership events)
      - `chat:write` (to post and update action notification messages in channels)
@@ -819,6 +820,7 @@ For automatic channel creation and full Slack integration, the bot token must ha
 
 - `bookmarks:write` - Add bookmarks to case channels
 - `channels:history` - Receive message events from public channels via Events API
+- `channels:join` - Join an existing public channel that a new case is linked to (optional; only with `[slack] allow_existing_channel`)
 - `channels:manage` - Create, rename, and invite users to public channels
 - `channels:read` - List and read channel information, receive membership events
 - `chat:write` - Post and update action notification messages in channels
@@ -1123,6 +1125,8 @@ These scopes are required for the Bot User OAuth Token (`xoxb-...`):
 | `bookmarks:write` | `bookmarks.add` | Add bookmarks to case channels | `pkg/service/slack/client.go` |
 | `channels:history` | Events API | Receive `message.channels` events from public channels | Webhook handler |
 | `admin.conversations:write` (User token) | `admin.conversations.setTeams` | Connect channels across workspaces in Enterprise Grid (requires User OAuth Token, org-level only) | `pkg/service/slack/admin_client.go` |
+| `channels:join` | `conversations.join` | Make the bot a member of the existing public channel a new case is linked to (`[slack] allow_existing_channel`) | `pkg/service/slack/client.go` |
+| `channels:read` / `groups:read` | `users.conversations` | List the channels the acting user belongs to that the bot can see, as candidates for linking a new case (`[slack] allow_existing_channel`) | `pkg/service/slack/client.go` |
 | `channels:manage` | `conversations.create` | Create new public Slack channels for cases | `pkg/service/slack/client.go` |
 | `channels:manage` | `conversations.rename` | Rename Slack channels when case name changes | `pkg/service/slack/client.go` |
 | `channels:manage` | `conversations.invite` | Invite users to case channels | `pkg/service/slack/client.go` |

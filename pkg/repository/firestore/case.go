@@ -347,6 +347,48 @@ func (r *caseRepository) GetBySlackChannelID(ctx context.Context, workspaceID st
 	return &c, nil
 }
 
+// firestoreInQueryLimit is the maximum number of values Firestore accepts in
+// one `in` filter.
+const firestoreInQueryLimit = 30
+
+func (r *caseRepository) GetBySlackChannelIDs(ctx context.Context, workspaceID string, channelIDs []string) (map[string]*model.Case, error) {
+	result := make(map[string]*model.Case)
+	// An `in` filter on one field runs on the existing single-field index, so
+	// this needs no composite index.
+	for start := 0; start < len(channelIDs); start += firestoreInQueryLimit {
+		end := min(start+firestoreInQueryLimit, len(channelIDs))
+		chunk := channelIDs[start:end]
+
+		iter := r.casesCollection(workspaceID).
+			Where("SlackChannelID", "in", chunk).
+			Documents(ctx)
+		for {
+			docSnap, err := iter.Next()
+			if err == iterator.Done {
+				break
+			}
+			if err != nil {
+				iter.Stop()
+				return nil, goerr.Wrap(err, "failed to query cases by slack channel IDs",
+					goerr.V("workspace_id", workspaceID),
+					goerr.V("chunk_size", len(chunk)))
+			}
+			var c model.Case
+			if err := docSnap.DataTo(&c); err != nil {
+				iter.Stop()
+				return nil, goerr.Wrap(err, "failed to decode case",
+					goerr.V("workspace_id", workspaceID),
+					goerr.V("doc_id", docSnap.Ref.ID))
+			}
+			if _, dup := result[c.SlackChannelID]; !dup {
+				result[c.SlackChannelID] = &c
+			}
+		}
+		iter.Stop()
+	}
+	return result, nil
+}
+
 func (r *caseRepository) GetBySlackThread(ctx context.Context, workspaceID string, channelID string, threadTS string) (*model.Case, error) {
 	if channelID == "" || threadTS == "" {
 		return nil, nil

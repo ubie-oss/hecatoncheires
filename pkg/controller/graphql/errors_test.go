@@ -54,6 +54,10 @@ func TestErrorCode(t *testing.T) {
 		{"invalid knowledge input", goerr.Wrap(usecase.ErrKnowledgeInput, "x"), gqlctrl.ErrCodeBadUserInput},
 		{"unknown tag id", goerr.Wrap(usecase.ErrUnknownTag, "x"), gqlctrl.ErrCodeBadUserInput},
 		{"tag still referenced", goerr.Wrap(usecase.ErrTagInUse, "x"), gqlctrl.ErrCodeConflict},
+		{"slack channel not linkable", goerr.Wrap(usecase.ErrSlackChannelNotLinkable, "x"), gqlctrl.ErrCodeSlackChannelNotLinkable},
+		{"slack channel already linked", goerr.Wrap(usecase.ErrSlackChannelAlreadyLinked, "x"), gqlctrl.ErrCodeSlackChannelLinked},
+		{"slack channel join failed", goerr.Wrap(usecase.ErrSlackChannelJoinFailed, "x"), gqlctrl.ErrCodeSlackChannelJoinFailed},
+		{"existing slack channel disabled", goerr.Wrap(usecase.ErrExistingSlackChannelDisabled, "x"), gqlctrl.ErrCodeBadUserInput},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -144,6 +148,10 @@ func TestIsClientError(t *testing.T) {
 		{"tag still referenced → client", goerr.Wrap(usecase.ErrTagInUse, "x"), true},
 		{"field pattern mismatch → client", goerr.Wrap(model.ErrTextPatternMismatch, "x"), true},
 		{"random → server", goerr.New("boom"), false},
+		{"slack channel not linkable → client", goerr.Wrap(usecase.ErrSlackChannelNotLinkable, "x"), true},
+		{"slack channel already linked → client", goerr.Wrap(usecase.ErrSlackChannelAlreadyLinked, "x"), true},
+		{"existing slack channel disabled → client", goerr.Wrap(usecase.ErrExistingSlackChannelDisabled, "x"), true},
+		{"slack channel join failed → server", goerr.Wrap(usecase.ErrSlackChannelJoinFailed, "x"), false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

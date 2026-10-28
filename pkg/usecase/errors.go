@@ -104,6 +104,25 @@ var (
 	// wiring that withholds the action tools for thread-mode workspaces.
 	ErrCaseThreadModeNoActions = errors.New("thread-mode case cannot have actions")
 
+	// Existing Slack channel errors (case creation linking an existing channel)
+	//
+	// ErrExistingSlackChannelDisabled is returned when an existing channel is
+	// requested (or its candidates listed) for a workspace where
+	// ExistingSlackChannelAllowed is false.
+	ErrExistingSlackChannelDisabled = errors.New("linking an existing slack channel is not enabled for this workspace")
+	// ErrSlackChannelNotLinkable is returned when the requested channel cannot
+	// become a case channel: it is a configured monitor / workspace channel,
+	// is missing, archived or invisible to the bot, is private without the
+	// bot, or the acting user is not a member.
+	ErrSlackChannelNotLinkable = errors.New("slack channel cannot be linked to a case")
+	// ErrSlackChannelAlreadyLinked is returned when a case in any workspace
+	// already uses the requested channel.
+	ErrSlackChannelAlreadyLinked = errors.New("slack channel is already linked to a case")
+	// ErrSlackChannelJoinFailed is returned when the bot could not join the
+	// requested public channel. Unlike the two errors above it can stem from
+	// the deployment (a missing channels:join scope), so it is reported.
+	ErrSlackChannelJoinFailed = errors.New("bot failed to join slack channel")
+
 	// Action Slack-post state errors
 	ErrSlackMessageAlreadyPosted = errors.New("action already has a Slack message")
 	ErrCaseHasNoSlackChannel     = errors.New("parent case has no Slack channel")

@@ -14,6 +14,18 @@ type Service interface {
 	// If teamID is empty, behaves the same as before (single-workspace mode).
 	ListJoinedChannels(ctx context.Context, teamID string) ([]Channel, error)
 
+	// ListMemberChannels lists the non-archived public and private channels
+	// userID belongs to that the bot can see (users.conversations with the
+	// bot token). Private channels are limited to ones the bot also belongs
+	// to. teamID narrows the result for org-level apps; empty means the
+	// token's own workspace.
+	ListMemberChannels(ctx context.Context, userID, teamID string) ([]Channel, error)
+
+	// JoinChannel makes the bot a member of a public channel
+	// (conversations.join, bot scope channels:join). Already being a member
+	// is not an error.
+	JoinChannel(ctx context.Context, channelID string) error
+
 	// GetChannelNames retrieves channel names for the given IDs (with caching)
 	// Used for displaying channel names in the UI
 	GetChannelNames(ctx context.Context, ids []string) (map[string]string, error)
@@ -216,6 +228,9 @@ type UserGroup struct {
 type Channel struct {
 	ID   string
 	Name string
+	// IsPrivate is set by ListMemberChannels. ListJoinedChannels lists
+	// public channels only and leaves it false.
+	IsPrivate bool
 }
 
 // ChannelInfo is the rich channel descriptor returned by GetChannelInfo. It
@@ -230,6 +245,7 @@ type ChannelInfo struct {
 	IsPrivate  bool
 	IsArchived bool
 	IsShared   bool // shared / connected / org-shared (any cross-workspace flavour)
+	IsMember   bool // whether the bot is a member of the channel
 	NumMembers int
 	Creator    string    // Slack user ID of the channel creator
 	CreatedAt  time.Time // Channel creation time (UTC)

@@ -558,7 +558,20 @@ func (r *mutationResolver) CreateCase(ctx context.Context, workspaceID string, i
 
 	isPrivate := input.IsPrivate != nil && *input.IsPrivate
 	isTest := input.IsTest != nil && *input.IsTest
-	created, err := r.UseCases.Case.CreateCase(ctx, workspaceID, input.Title, description, assigneeIDs, fieldValues, isPrivate, isTest, "", "")
+	var opts []usecase.CreateCaseOption
+	if input.ExistingSlackChannelID != nil {
+		// The usecase takes isPrivate as a bool and cannot tell an omitted
+		// value from false, so the input shape is checked here: with an
+		// existing channel the privacy follows the channel, so a true or
+		// false isPrivate is rejected. An explicit null carries no value and
+		// is treated like an omitted field.
+		if input.IsPrivate != nil {
+			return nil, goerr.Wrap(usecase.ErrInvalidArgument, "isPrivate must be omitted when existingSlackChannelID is set",
+				goerr.V("workspace_id", workspaceID))
+		}
+		opts = append(opts, usecase.WithExistingSlackChannel(*input.ExistingSlackChannelID))
+	}
+	created, err := r.UseCases.Case.CreateCase(ctx, workspaceID, input.Title, description, assigneeIDs, fieldValues, isPrivate, isTest, "", "", opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1625,8 +1638,22 @@ func (r *queryResolver) FieldConfiguration(ctx context.Context, workspaceID stri
 		Labels: &graphql1.EntityLabels{
 			Case: schema.Labels.Case,
 		},
-		ActionConfig: toActionConfig(statusSet),
+		ActionConfig:              toActionConfig(statusSet),
+		AllowExistingSlackChannel: r.UseCases.Case.ExistingSlackChannelAllowed(workspaceID),
 	}, nil
+}
+
+// ExistingSlackChannelCandidates is the resolver for the existingSlackChannelCandidates field.
+func (r *queryResolver) ExistingSlackChannelCandidates(ctx context.Context, workspaceID string) ([]*graphql1.SlackChannelCandidate, error) {
+	candidates, err := r.UseCases.Case.ListExistingSlackChannelCandidates(ctx, workspaceID)
+	if err != nil {
+		return nil, goerr.Wrap(err, "failed to list existing slack channel candidates", goerr.V("workspace_id", workspaceID))
+	}
+	result := make([]*graphql1.SlackChannelCandidate, len(candidates))
+	for i, c := range candidates {
+		result[i] = &graphql1.SlackChannelCandidate{ID: c.ID, Name: c.Name, IsPrivate: c.IsPrivate}
+	}
+	return result, nil
 }
 
 // CaseStatusConfig is the resolver for the caseStatusConfig field.

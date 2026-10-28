@@ -55,6 +55,7 @@ const fieldConfigMock = {
             { __typename: 'ActionStatus', id: 'COMPLETED', name: 'Completed', description: null, color: 'success', emoji: null },
           ],
         },
+        allowExistingSlackChannel: false,
       },
     },
   },

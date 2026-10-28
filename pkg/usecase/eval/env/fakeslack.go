@@ -96,6 +96,14 @@ func (f *fakeSlack) ListJoinedChannels(_ context.Context, _ string) ([]slacksvc.
 	return nil, nil
 }
 
+func (f *fakeSlack) ListMemberChannels(_ context.Context, _, _ string) ([]slacksvc.Channel, error) {
+	return nil, nil
+}
+
+func (f *fakeSlack) JoinChannel(_ context.Context, _ string) error {
+	return nil
+}
+
 func (f *fakeSlack) GetChannelNames(_ context.Context, ids []string) (map[string]string, error) {
 	out := make(map[string]string, len(ids))
 	for _, id := range ids {

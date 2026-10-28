@@ -150,12 +150,13 @@ type CreateCaseImportInput struct {
 }
 
 type CreateCaseInput struct {
-	Title       string             `json:"title"`
-	Description *string            `json:"description,omitempty"`
-	AssigneeIDs []string           `json:"assigneeIDs,omitempty"`
-	Fields      []*FieldValueInput `json:"fields,omitempty"`
-	IsPrivate   *bool              `json:"isPrivate,omitempty"`
-	IsTest      *bool              `json:"isTest,omitempty"`
+	Title                  string             `json:"title"`
+	Description            *string            `json:"description,omitempty"`
+	AssigneeIDs            []string           `json:"assigneeIDs,omitempty"`
+	Fields                 []*FieldValueInput `json:"fields,omitempty"`
+	IsPrivate              *bool              `json:"isPrivate,omitempty"`
+	IsTest                 *bool              `json:"isTest,omitempty"`
+	ExistingSlackChannelID *string            `json:"existingSlackChannelID,omitempty"`
 }
 
 type CreateDraftInput struct {
@@ -224,9 +225,10 @@ type EntityLabels struct {
 }
 
 type FieldConfiguration struct {
-	Fields       []*FieldDefinition `json:"fields"`
-	Labels       *EntityLabels      `json:"labels"`
-	ActionConfig *ActionConfig      `json:"actionConfig"`
+	Fields                    []*FieldDefinition `json:"fields"`
+	Labels                    *EntityLabels      `json:"labels"`
+	ActionConfig              *ActionConfig      `json:"actionConfig"`
+	AllowExistingSlackChannel bool               `json:"allowExistingSlackChannel"`
 }
 
 type FieldDefinition struct {
@@ -494,6 +496,12 @@ type SetActionStepDoneInput struct {
 type SlackChannel struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
+}
+
+type SlackChannelCandidate struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	IsPrivate bool   `json:"isPrivate"`
 }
 
 type SlackChannelInfo struct {

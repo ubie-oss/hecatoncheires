@@ -472,6 +472,11 @@ They are **not detected** — which is different from not implemented:
   reported by `hecatoncheires validate` itself (without `--check-db`) and refused
   at startup. A run record naming a model the configuration no longer declares is
   a historical fact about that run, not an inconsistency.
+- **`[slack] allow_existing_channel`.** The setting only decides whether case
+  creation may link an existing channel; nothing stored records which way a
+  channel was obtained. Turning it off leaves already linked Cases consistent.
+  Two Cases sharing one `SlackChannelID` (possible when two creation requests
+  for the same channel race) is not detected either.
 - **`[authz]` workspace policies.** A policy decides who may access a workspace
   at request time; no stored entity records that decision or any value derived
   from the policy. Changing the policy therefore cannot leave persisted data

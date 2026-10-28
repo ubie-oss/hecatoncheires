@@ -135,6 +135,67 @@ func (c *client) ListJoinedChannels(ctx context.Context, teamID string) ([]Chann
 	return channels, nil
 }
 
+// ListMemberChannels lists the non-archived channels userID belongs to that
+// the bot can see, via users.conversations with the bot token.
+func (c *client) ListMemberChannels(ctx context.Context, userID, teamID string) ([]Channel, error) {
+	var channels []Channel
+	var cursor string
+
+	for {
+		params := &slack.GetConversationsForUserParameters{
+			UserID:          userID,
+			Types:           []string{"public_channel", "private_channel"},
+			ExcludeArchived: true,
+			Limit:           200,
+			Cursor:          cursor,
+			TeamID:          teamID,
+		}
+
+		convs, nextCursor, err := c.api.GetConversationsForUserContext(ctx, params)
+		if err != nil {
+			var rateLimitErr *slack.RateLimitedError
+			if errors.As(err, &rateLimitErr) {
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				case <-time.After(rateLimitErr.RetryAfter):
+					continue
+				}
+			}
+			return nil, goerr.Wrap(err, "failed to get conversations for user",
+				goerr.V("user_id", userID), goerr.V("team_id", teamID))
+		}
+
+		for _, conv := range convs {
+			channels = append(channels, Channel{
+				ID:        conv.ID,
+				Name:      conv.Name,
+				IsPrivate: conv.IsPrivate,
+			})
+		}
+
+		if nextCursor == "" {
+			break
+		}
+		cursor = nextCursor
+	}
+
+	return channels, nil
+}
+
+// JoinChannel makes the bot a member of a public channel. Slack answers ok
+// with an already_in_channel warning when the bot is a member already.
+func (c *client) JoinChannel(ctx context.Context, channelID string) error {
+	if _, _, _, err := c.api.JoinConversationContext(ctx, channelID); err != nil {
+		return goerr.Wrap(err, "failed to join Slack channel", goerr.V("channel_id", channelID))
+	}
+	return nil
+}
+
+// ErrChannelUnavailable is returned (wrapped) by GetChannelInfo when Slack
+// answers that the channel does not exist or is not visible to the bot.
+var ErrChannelUnavailable = goerr.New("slack channel is unavailable")
+
 // channelUnavailableErrors are the conversations.info errors that mean the
 // channel does not exist for this bot (deleted, or private without the bot).
 var channelUnavailableErrors = map[string]bool{
@@ -284,6 +345,11 @@ func (c *client) GetChannelInfo(ctx context.Context, channelID string) (*Channel
 		IncludeNumMembers: true,
 	})
 	if err != nil {
+		if isChannelUnavailable(err) {
+			return nil, goerr.Wrap(ErrChannelUnavailable, "get channel info",
+				goerr.V("channel_id", channelID),
+				goerr.V("slack_error", err.Error()))
+		}
 		return nil, goerr.Wrap(err, "get channel info", goerr.V("channel_id", channelID))
 	}
 	out := &ChannelInfo{
@@ -294,6 +360,7 @@ func (c *client) GetChannelInfo(ctx context.Context, channelID string) (*Channel
 		IsPrivate:  info.IsPrivate,
 		IsArchived: info.IsArchived,
 		IsShared:   info.IsShared || info.IsExtShared || info.IsOrgShared,
+		IsMember:   info.IsMember,
 		NumMembers: info.NumMembers,
 		Creator:    info.Creator,
 	}

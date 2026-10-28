@@ -74,6 +74,10 @@ type mockSlackService struct {
 	getUserGroupMembersFn    func(ctx context.Context, groupID string) ([]string, error)
 	postEphemeralFn          func(ctx context.Context, channelID string, userID string, text string) error
 	postMessageFn            func(ctx context.Context, channelID string, blocks []goslack.Block, text string) (string, error)
+	getChannelInfoFn         func(ctx context.Context, channelID string) (*slack.ChannelInfo, error)
+	listMemberChannelsFn     func(ctx context.Context, userID, teamID string) ([]slack.Channel, error)
+	joinChannelFn            func(ctx context.Context, channelID string) error
+	joinedChannelIDs         []string
 	invitedChannelID         string
 	invitedUserIDs           []string
 	bookmarkChannelID        string
@@ -149,12 +153,28 @@ func (m *mockSlackService) GetConversationMembers(ctx context.Context, channelID
 	return nil, nil
 }
 
-func (m *mockSlackService) GetChannelInfo(_ context.Context, channelID string) (*slack.ChannelInfo, error) {
+func (m *mockSlackService) GetChannelInfo(ctx context.Context, channelID string) (*slack.ChannelInfo, error) {
+	if m.getChannelInfoFn != nil {
+		return m.getChannelInfoFn(ctx, channelID)
+	}
 	// Default to a minimal ChannelInfo so tests that exercise paths
-	// touching this method don't have to set a custom fixture. Tests
-	// that need a richer payload are expected to drive it through the
-	// production wiring rather than override here.
+	// touching this method don't have to set a custom fixture.
 	return &slack.ChannelInfo{ID: channelID, Name: "channel-" + channelID}, nil
+}
+
+func (m *mockSlackService) ListMemberChannels(ctx context.Context, userID, teamID string) ([]slack.Channel, error) {
+	if m.listMemberChannelsFn != nil {
+		return m.listMemberChannelsFn(ctx, userID, teamID)
+	}
+	return nil, nil
+}
+
+func (m *mockSlackService) JoinChannel(ctx context.Context, channelID string) error {
+	m.joinedChannelIDs = append(m.joinedChannelIDs, channelID)
+	if m.joinChannelFn != nil {
+		return m.joinChannelFn(ctx, channelID)
+	}
+	return nil
 }
 
 func (m *mockSlackService) RenameChannel(ctx context.Context, channelID string, caseID int64, caseName string, prefix string) error {

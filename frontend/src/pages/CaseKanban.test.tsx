@@ -23,7 +23,7 @@ function setup(path: string) {
       { id: 3, title: 'Closed IT case', boardStatus: 'done', fields: [{ fieldId: 'category', value: 'it' }] },
     ].map((c) => ({ ...c, __typename: 'Case', workspaceId: 'review', description: '', status: 'OPEN', archivedAt: null, isPrivate: false, isTest: false, accessDenied: false, reporterID: null, reporter: null, assigneeIDs: [], assignees: [], slackChannelID: null, slackThreadTS: null, isThreadBound: true, createdAt: '', updatedAt: '', fields: c.fields.map((f) => ({ ...f, display: null })) })) } } },
     { request: { query: GET_FIELD_CONFIGURATION, variables: { workspaceId: 'review' } }, result: { data: { fieldConfiguration: {
-      labels: { case: 'Case' }, actionConfig: { initial: '', closed: [], statuses: [] },
+      labels: { case: 'Case' }, actionConfig: { initial: '', closed: [], statuses: [] }, allowExistingSlackChannel: false,
       fields: [{ id: 'category', name: 'Category', type: 'SELECT', required: false, description: null, referenceWorkspaceId: null, options: [{ id: 'it', name: 'IT', description: null, metadata: null }, { id: 'sales', name: 'Sales', description: null, metadata: null }] }],
     } } } },
   ]

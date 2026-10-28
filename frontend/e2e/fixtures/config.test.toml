@@ -9,6 +9,11 @@ name = "E2E Test Workspace"
 [labels]
 case = "Case"
 
+# Enabled on purpose: the E2E backend runs without Slack, so the feature must
+# still stay hidden (fieldConfiguration.allowExistingSlackChannel is false).
+[slack]
+allow_existing_channel = true
+
 # Minimal field definitions for testing
 [[fields]]
 id = "category"
