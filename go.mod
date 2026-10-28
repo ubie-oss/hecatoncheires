@@ -10,7 +10,7 @@ require (
 	github.com/bradleyfalzon/ghinstallation/v2 v2.19.0
 	github.com/fatih/color v1.19.0
 	github.com/getsentry/sentry-go v0.48.0
-	github.com/go-chi/chi/v5 v5.3.1
+	github.com/go-chi/chi/v5 v5.4.0
 	github.com/goccy/go-yaml v1.19.2
 	github.com/gollem-dev/agentkit v0.4.1
 	github.com/gollem-dev/tools/jira v0.2.0
