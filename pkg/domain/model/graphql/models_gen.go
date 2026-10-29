@@ -504,6 +504,12 @@ type SlackChannelCandidate struct {
 	IsPrivate bool   `json:"isPrivate"`
 }
 
+type SlackChannelCandidateList struct {
+	Channels  []*SlackChannelCandidate `json:"channels"`
+	HasMore   bool                     `json:"hasMore"`
+	FetchedAt time.Time                `json:"fetchedAt"`
+}
+
 type SlackChannelInfo struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`

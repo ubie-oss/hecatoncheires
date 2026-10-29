@@ -134,11 +134,16 @@ workspace sets `[slack] allow_existing_channel = true` (see
 [Configuration → Linking an existing channel](configuration.md#linking-an-existing-channel)),
 the **New case** form shows a **Slack channel** choice:
 
-1. Choose **Use an existing channel**. The channel list is loaded at this point.
-2. Type part of the channel name to narrow the list, then pick one channel.
-   The list shows channels you have joined; a private channel appears only when
-   the bot has been invited to it. Channels already linked to a Case are not
-   listed.
+1. Choose **Use an existing channel**. The first time, the server reads the
+   list of channels you have joined from Slack, which can take a while if you
+   are in many channels; after that the stored list is used.
+2. Type part of the channel name to search, then pick one channel. Up to 50
+   matches are shown; if more match, a note under the options asks you to type
+   more of the name. The list shows channels you have joined; a private channel
+   appears only when the bot has been invited to it. Channels already linked to
+   a Case are not listed. The line under the picker shows when your channels
+   were read from Slack; if a channel you joined recently is missing, press
+   **Reload** on that line.
 3. The form shows whether the Case will be private: it follows the channel (a
    private channel makes a private Case), so the **Private case** checkbox is
    hidden. Switching back to **Create a new channel** restores the checkbox as

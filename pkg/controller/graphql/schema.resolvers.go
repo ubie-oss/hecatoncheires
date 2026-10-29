@@ -1644,16 +1644,24 @@ func (r *queryResolver) FieldConfiguration(ctx context.Context, workspaceID stri
 }
 
 // ExistingSlackChannelCandidates is the resolver for the existingSlackChannelCandidates field.
-func (r *queryResolver) ExistingSlackChannelCandidates(ctx context.Context, workspaceID string) ([]*graphql1.SlackChannelCandidate, error) {
-	candidates, err := r.UseCases.Case.ListExistingSlackChannelCandidates(ctx, workspaceID)
+func (r *queryResolver) ExistingSlackChannelCandidates(ctx context.Context, workspaceID string, query *string, refresh *bool) (*graphql1.SlackChannelCandidateList, error) {
+	var q string
+	if query != nil {
+		q = *query
+	}
+	list, err := r.UseCases.Case.ListExistingSlackChannelCandidates(ctx, workspaceID, q, refresh != nil && *refresh)
 	if err != nil {
 		return nil, goerr.Wrap(err, "failed to list existing slack channel candidates", goerr.V("workspace_id", workspaceID))
 	}
-	result := make([]*graphql1.SlackChannelCandidate, len(candidates))
-	for i, c := range candidates {
-		result[i] = &graphql1.SlackChannelCandidate{ID: c.ID, Name: c.Name, IsPrivate: c.IsPrivate}
+	channels := make([]*graphql1.SlackChannelCandidate, len(list.Candidates))
+	for i, c := range list.Candidates {
+		channels[i] = &graphql1.SlackChannelCandidate{ID: c.ID, Name: c.Name, IsPrivate: c.IsPrivate}
 	}
-	return result, nil
+	return &graphql1.SlackChannelCandidateList{
+		Channels:  channels,
+		HasMore:   list.HasMore,
+		FetchedAt: list.FetchedAt,
+	}, nil
 }
 
 // CaseStatusConfig is the resolver for the caseStatusConfig field.

@@ -3,6 +3,7 @@ package usecase_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/m-mizutani/hecatoncheires/pkg/repository/memory"
 	"github.com/m-mizutani/hecatoncheires/pkg/service/slack"
 	"github.com/m-mizutani/hecatoncheires/pkg/usecase"
+	"github.com/m-mizutani/hecatoncheires/pkg/utils/async"
 )
 
 const (
@@ -337,8 +339,38 @@ func (c *updateFailingCases) Update(context.Context, string, *model.Case) (*mode
 	return nil, errUpdateFailed
 }
 
+// listSlack makes the fixture's users.conversations answer channels and counts
+// the calls.
+func (f *existingChannelFixture) listSlack(channels ...slack.Channel) *int {
+	calls := 0
+	f.slack.listMemberChannelsFn = func(context.Context, string, string) ([]slack.Channel, error) {
+		calls++
+		return channels, nil
+	}
+	return &calls
+}
+
+// storeMemberChannels stores the actor's channel list as fetched at fetchedAt.
+func (f *existingChannelFixture) storeMemberChannels(t *testing.T, fetchedAt time.Time, channels ...model.SlackMemberChannel) {
+	t.Helper()
+	gt.NoError(t, f.repo.SlackMemberChannels().Set(context.Background(), &model.SlackMemberChannels{
+		WorkspaceID: existingChWorkspace,
+		UserID:      existingChActor,
+		Channels:    channels,
+		FetchedAt:   fetchedAt,
+	})).Required()
+}
+
+func candidateIDs(list *usecase.SlackChannelCandidateList) []string {
+	ids := make([]string, len(list.Candidates))
+	for i, c := range list.Candidates {
+		ids[i] = c.ID
+	}
+	return ids
+}
+
 func TestCaseUseCase_ListExistingSlackChannelCandidates(t *testing.T) {
-	t.Run("returns the user's channels minus configured and linked ones, sorted by name", func(t *testing.T) {
+	t.Run("lists from Slack on first use, minus configured and linked channels, sorted by name, and stores the list", func(t *testing.T) {
 		f := newExistingChannelFixture(t)
 		var gotUser, gotTeam string
 		f.slack.listMemberChannelsFn = func(_ context.Context, userID, teamID string) ([]slack.Channel, error) {
@@ -360,43 +392,173 @@ func TestCaseUseCase_ListExistingSlackChannelCandidates(t *testing.T) {
 		})
 		gt.NoError(t, err).Required()
 
-		got, err := f.uc.ListExistingSlackChannelCandidates(actorContext(), existingChWorkspace)
+		before := time.Now()
+		got, err := f.uc.ListExistingSlackChannelCandidates(actorContext(), existingChWorkspace, "", false)
 		gt.NoError(t, err).Required()
-		gt.Value(t, got).Equal([]usecase.SlackChannelCandidate{
+		gt.Value(t, got.Candidates).Equal([]usecase.SlackChannelCandidate{
 			{ID: "C1", Name: "alpha", IsPrivate: false},
 			{ID: "C4", Name: "beta", IsPrivate: true},
 		})
+		gt.Bool(t, got.HasMore).False()
+		gt.Bool(t, got.FetchedAt.Before(before)).False()
 		gt.String(t, gotUser).Equal(existingChActor)
 		gt.String(t, gotTeam).Equal("T-HOME")
+
+		stored, err := f.repo.SlackMemberChannels().Get(context.Background(), existingChWorkspace, existingChActor)
+		gt.NoError(t, err).Required()
+		gt.Value(t, stored.Channels).Equal([]model.SlackMemberChannel{
+			{ID: "C4", Name: "beta", IsPrivate: true},
+			{ID: "C2", Name: "linked-elsewhere"},
+			{ID: existingChMonitor, Name: "monitor"},
+			{ID: "C1", Name: "alpha"},
+		})
+		gt.Bool(t, stored.FetchedAt.Equal(got.FetchedAt)).True()
+	})
+
+	t.Run("a fresh stored list is searched without calling Slack", func(t *testing.T) {
+		f := newExistingChannelFixture(t)
+		calls := f.listSlack()
+		fetchedAt := time.Now().Add(-time.Minute).UTC()
+		f.storeMemberChannels(t, fetchedAt, model.SlackMemberChannel{ID: "C1", Name: "alpha"})
+
+		got, err := f.uc.ListExistingSlackChannelCandidates(actorContext(), existingChWorkspace, "", false)
+		gt.NoError(t, err).Required()
+		async.Wait()
+		gt.Value(t, candidateIDs(got)).Equal([]string{"C1"})
+		gt.Bool(t, got.FetchedAt.Equal(fetchedAt)).True()
+		gt.Number(t, *calls).Equal(0)
+	})
+
+	t.Run("query matches a name substring ignoring case and a leading #", func(t *testing.T) {
+		f := newExistingChannelFixture(t)
+		f.listSlack()
+		f.storeMemberChannels(t, time.Now().UTC(),
+			model.SlackMemberChannel{ID: "C1", Name: "incident-db"},
+			model.SlackMemberChannel{ID: "C2", Name: "team-platform"},
+			model.SlackMemberChannel{ID: "C3", Name: "sec-INCIDENT-triage"},
+		)
+
+		for _, query := range []string{"incident", "INCIDENT", "#incident", "  incident  "} {
+			got, err := f.uc.ListExistingSlackChannelCandidates(actorContext(), existingChWorkspace, query, false)
+			gt.NoError(t, err).Required()
+			gt.Value(t, candidateIDs(got)).Equal([]string{"C1", "C3"})
+		}
+
+		got, err := f.uc.ListExistingSlackChannelCandidates(actorContext(), existingChWorkspace, "C2", false)
+		gt.NoError(t, err).Required()
+		gt.Array(t, got.Candidates).Length(0)
+	})
+
+	t.Run("returns at most 50 matches and reports the rest, skipping linked channels while filling the page", func(t *testing.T) {
+		f := newExistingChannelFixture(t)
+		f.listSlack()
+		var channels []model.SlackMemberChannel
+		for i := range 52 {
+			channels = append(channels, model.SlackMemberChannel{ID: fmt.Sprintf("C%03d", i), Name: fmt.Sprintf("ch-%03d", i)})
+		}
+		f.storeMemberChannels(t, time.Now().UTC(), channels...)
+		// The first channel in name order is linked, so the page starts at the
+		// second and still holds 50.
+		_, err := f.repo.Case().Create(context.Background(), existingChWorkspace, &model.Case{
+			Title:          "Uses C000",
+			Status:         types.CaseStatusOpen,
+			ReporterID:     "U-REP",
+			SlackChannelID: "C000",
+			CreatedAt:      time.Now().UTC(),
+			UpdatedAt:      time.Now().UTC(),
+		})
+		gt.NoError(t, err).Required()
+
+		got, err := f.uc.ListExistingSlackChannelCandidates(actorContext(), existingChWorkspace, "", false)
+		gt.NoError(t, err).Required()
+		gt.Array(t, got.Candidates).Length(50).Required()
+		gt.String(t, got.Candidates[0].ID).Equal("C001")
+		gt.String(t, got.Candidates[49].ID).Equal("C050")
+		gt.Bool(t, got.HasMore).True()
+
+		// 51 channels remain unlinked; narrowing to ch-05x leaves C050 and C051.
+		got, err = f.uc.ListExistingSlackChannelCandidates(actorContext(), existingChWorkspace, "ch-05", false)
+		gt.NoError(t, err).Required()
+		gt.Value(t, candidateIDs(got)).Equal([]string{"C050", "C051"})
+		gt.Bool(t, got.HasMore).False()
+	})
+
+	t.Run("a stale list is served as is and refreshed once in the background", func(t *testing.T) {
+		f := newExistingChannelFixture(t)
+		calls := f.listSlack(slack.Channel{ID: "C-NEW", Name: "joined-later"})
+		staleAt := time.Now().Add(-time.Hour).UTC()
+		f.storeMemberChannels(t, staleAt, model.SlackMemberChannel{ID: "C-OLD", Name: "old"})
+
+		got, err := f.uc.ListExistingSlackChannelCandidates(actorContext(), existingChWorkspace, "", false)
+		gt.NoError(t, err).Required()
+		gt.Value(t, candidateIDs(got)).Equal([]string{"C-OLD"})
+		gt.Bool(t, got.FetchedAt.Equal(staleAt)).True()
+
+		// A second search before the refresh lands must not start another
+		// listing: the first request holds the refresh claim.
+		_, err = f.uc.ListExistingSlackChannelCandidates(actorContext(), existingChWorkspace, "o", false)
+		gt.NoError(t, err).Required()
+		async.Wait()
+		gt.Number(t, *calls).Equal(1)
+
+		stored, err := f.repo.SlackMemberChannels().Get(context.Background(), existingChWorkspace, existingChActor)
+		gt.NoError(t, err).Required()
+		gt.Value(t, stored.Channels).Equal([]model.SlackMemberChannel{{ID: "C-NEW", Name: "joined-later"}})
+
+		got, err = f.uc.ListExistingSlackChannelCandidates(actorContext(), existingChWorkspace, "", false)
+		gt.NoError(t, err).Required()
+		gt.Value(t, candidateIDs(got)).Equal([]string{"C-NEW"})
+	})
+
+	t.Run("refresh fetches from Slack even when the stored list is fresh", func(t *testing.T) {
+		f := newExistingChannelFixture(t)
+		calls := f.listSlack(slack.Channel{ID: "C-NEW", Name: "joined-now"})
+		f.storeMemberChannels(t, time.Now().UTC(), model.SlackMemberChannel{ID: "C-OLD", Name: "old"})
+
+		got, err := f.uc.ListExistingSlackChannelCandidates(actorContext(), existingChWorkspace, "", true)
+		gt.NoError(t, err).Required()
+		gt.Value(t, candidateIDs(got)).Equal([]string{"C-NEW"})
+		gt.Number(t, *calls).Equal(1)
+	})
+
+	t.Run("lists are kept per user", func(t *testing.T) {
+		f := newExistingChannelFixture(t)
+		calls := f.listSlack(slack.Channel{ID: "C-OTHER", Name: "others"})
+		f.storeMemberChannels(t, time.Now().UTC(), model.SlackMemberChannel{ID: "C-MINE", Name: "mine"})
+
+		other := auth.ContextWithToken(context.Background(), &auth.Token{Sub: "U-OTHER"})
+		got, err := f.uc.ListExistingSlackChannelCandidates(other, existingChWorkspace, "", false)
+		gt.NoError(t, err).Required()
+		gt.Value(t, candidateIDs(got)).Equal([]string{"C-OTHER"})
+		gt.Number(t, *calls).Equal(1)
 	})
 
 	t.Run("disabled workspace is rejected without calling Slack", func(t *testing.T) {
 		f := newExistingChannelFixture(t)
-		called := false
-		f.slack.listMemberChannelsFn = func(context.Context, string, string) ([]slack.Channel, error) {
-			called = true
-			return nil, nil
-		}
+		calls := f.listSlack()
 
-		_, err := f.uc.ListExistingSlackChannelCandidates(actorContext(), existingChOtherWS)
+		_, err := f.uc.ListExistingSlackChannelCandidates(actorContext(), existingChOtherWS, "", false)
 		gt.Error(t, err).Is(usecase.ErrExistingSlackChannelDisabled)
-		gt.Bool(t, called).False()
+		gt.Number(t, *calls).Equal(0)
 	})
 
 	t.Run("no auth token is access denied", func(t *testing.T) {
 		f := newExistingChannelFixture(t)
-		_, err := f.uc.ListExistingSlackChannelCandidates(context.Background(), existingChWorkspace)
+		_, err := f.uc.ListExistingSlackChannelCandidates(context.Background(), existingChWorkspace, "", false)
 		gt.Error(t, err).Is(usecase.ErrAccessDenied)
 	})
 
-	t.Run("a Slack failure is returned", func(t *testing.T) {
+	t.Run("a Slack failure on first use is returned and nothing is stored", func(t *testing.T) {
 		f := newExistingChannelFixture(t)
 		slackErr := errors.New("ratelimited")
 		f.slack.listMemberChannelsFn = func(context.Context, string, string) ([]slack.Channel, error) {
 			return nil, slackErr
 		}
-		_, err := f.uc.ListExistingSlackChannelCandidates(actorContext(), existingChWorkspace)
+		_, err := f.uc.ListExistingSlackChannelCandidates(actorContext(), existingChWorkspace, "", false)
 		gt.Error(t, err).Is(slackErr)
+
+		_, err = f.repo.SlackMemberChannels().Get(context.Background(), existingChWorkspace, existingChActor)
+		gt.Error(t, err).Is(memory.ErrNotFound)
 	})
 }
 

@@ -123,7 +123,11 @@ a complete one:
   repeats `omitted` on each target that lost messages, so the agent knows which
   thread it is missing. The per-call budget is shared across the targets of one
   call and charged in target order, so the same request returns the same
-  messages every time.
+  messages every time. Which messages a thread gives up depends on its `order`
+  parameter: the default `oldest` keeps the start of the thread and drops the
+  newest replies, while `latest` keeps the thread root and the newest replies
+  and drops the oldest ones. Use `latest` when the agent must see what was said
+  last (for example a progress check deciding whether someone already replied).
 
 Setting either flag to `0` disables that bound; a negative value is rejected at
 startup rather than read as "disabled". The two are independent: the per-message
@@ -476,7 +480,10 @@ They are **not detected** — which is different from not implemented:
   creation may link an existing channel; nothing stored records which way a
   channel was obtained. Turning it off leaves already linked Cases consistent.
   Two Cases sharing one `SlackChannelID` (possible when two creation requests
-  for the same channel race) is not detected either.
+  for the same channel race) is not detected either. The per-user channel lists
+  the existing-channel picker stores (`slackMemberChannels`) are not checked:
+  they hold what Slack returned, no configuration value, and the picker
+  refetches a list older than 10 minutes.
 - **`[authz]` workspace policies.** A policy decides who may access a workspace
   at request time; no stored entity records that decision or any value derived
   from the policy. Changing the policy therefore cannot leave persisted data

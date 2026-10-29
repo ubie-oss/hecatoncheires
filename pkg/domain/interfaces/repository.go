@@ -34,6 +34,7 @@ type Repository interface {
 	UserPreference() UserPreferenceRepository
 	HomeMessage() HomeMessageRepository
 	AssigneeRanking() AssigneeRankingRepository
+	SlackMemberChannels() SlackMemberChannelsRepository
 
 	// Auth methods
 	PutToken(ctx context.Context, token *auth.Token) error

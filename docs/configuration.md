@@ -789,6 +789,18 @@ the workspace is in channel mode and the server has Slack configured.
   channels already linked to a case. A private channel is listed only when the
   bot is a member — the bot cannot join a private channel itself, so invite it
   first.
+- **How the list is kept.** Slack has no way to search a user's channels by
+  name, so the server lists them all with `users.conversations` (200 per call,
+  Tier 3 rate limit) and stores the result in Firestore per workspace and user
+  (`workspaces/{workspaceID}/slackMemberChannels/{userID}/pages/{n}`, 2,000
+  channels per page). The picker searches that stored list by name and returns
+  at most 50 matches. A list older than 10 minutes is still used, and one
+  request refreshes it from Slack in the background (a claim in
+  `workspaces/{workspaceID}/slackMemberChannelRefreshes/{userID}` keeps other
+  requests from starting the same listing for 15 minutes). **Reload** under
+  the picker fetches it from Slack at once. Whether a channel is already linked
+  to a case is checked on every search, not stored. The stored list is derived
+  data: deleting it only makes the next search list the channels again.
 - **Bot membership.** If the bot is not in the chosen public channel, it joins
   it (`conversations.join`) when the case is created. If the join fails, the
   case is not created. The join happens before the user's membership is
