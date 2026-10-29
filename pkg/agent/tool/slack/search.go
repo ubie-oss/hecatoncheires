@@ -132,6 +132,19 @@ const (
 	getMessagesMaxTargets   = 10
 	getMessagesDefaultLimit = 20
 	getMessagesMaxLimit     = 200
+
+	// getMessagesLatestFetchCap is how many thread messages order=latest asks
+	// Slack for. conversations.replies returns messages oldest-first up to
+	// `limit`, so "the latest N" can only be had by fetching a wider window and
+	// keeping its tail. 1000 matches pkg/service/slack's threadFetchHardCap,
+	// which applies the same rule when collecting a thread for a case draft.
+	getMessagesLatestFetchCap = 1000
+)
+
+// Thread read orders for slack__get_messages.
+const (
+	getMessagesOrderOldest = "oldest"
+	getMessagesOrderLatest = "latest"
 )
 
 func (t *getMessagesTool) Spec() gollem.ToolSpec {
@@ -173,6 +186,12 @@ func (t *getMessagesTool) Spec() gollem.ToolSpec {
 				Type:        gollem.TypeInteger,
 				Description: "Max replies per thread (default 20, max 200).",
 				Required:    false,
+			},
+			"order": {
+				Type:        gollem.TypeString,
+				Description: "Which end of a long thread to keep. 'oldest' (default) returns the first thread_limit messages and, when the size limit is hit, drops the newest. 'latest' returns the thread root plus the most recent replies, and drops the oldest replies instead — use it when what happened last matters more than how the thread began. Either way messages are returned oldest-first.",
+				Required:    false,
+				Enum:        []string{getMessagesOrderOldest, getMessagesOrderLatest},
 			},
 		},
 	}
@@ -218,6 +237,17 @@ func (t *getMessagesTool) Run(ctx context.Context, args map[string]any) (map[str
 		}
 		threadLimit = int(v)
 	}
+	latest := false
+	if v, ok := args["order"].(string); ok && v != "" {
+		switch v {
+		case getMessagesOrderOldest:
+		case getMessagesOrderLatest:
+			latest = true
+		default:
+			return nil, fmt.Errorf("order must be %q or %q, got %q",
+				getMessagesOrderOldest, getMessagesOrderLatest, v)
+		}
+	}
 
 	tool.Update(ctx, fmt.Sprintf("Fetching %d Slack message(s)...", len(targets)))
 
@@ -226,7 +256,7 @@ func (t *getMessagesTool) Run(ctx context.Context, args map[string]any) (map[str
 	g.SetLimit(len(targets))
 	for i, tgt := range targets {
 		g.Go(func() error {
-			results[i] = t.fetchOne(gctx, tgt, includeThread, threadLimit)
+			results[i] = t.fetchOne(gctx, tgt, includeThread, threadLimit, latest)
 			return nil
 		})
 	}
@@ -244,7 +274,7 @@ func (t *getMessagesTool) Run(ctx context.Context, args map[string]any) (map[str
 		)
 	}
 
-	omitted, err := t.applyResultBudget(results)
+	omitted, err := t.applyResultBudget(results, latest)
 	if err != nil {
 		return nil, err
 	}
@@ -266,7 +296,11 @@ func (t *getMessagesTool) Run(ctx context.Context, args map[string]any) (map[str
 // results in target order instead makes the outcome depend only on the request.
 // A target that keeps none of its messages is reported as such rather than
 // silently emptied.
-func (t *getMessagesTool) applyResultBudget(results []map[string]any) (int, error) {
+//
+// With latest set, each thread is charged root first and then from its newest
+// reply backwards, so what runs out of budget is the oldest replies — the end
+// order=latest asked to give up. The kept messages stay oldest-first.
+func (t *getMessagesTool) applyResultBudget(results []map[string]any, latest bool) (int, error) {
 	budget := newResultBudget(t.limits.MaxResultBytes)
 	total := 0
 	for _, r := range results {
@@ -275,16 +309,15 @@ func (t *getMessagesTool) applyResultBudget(results []map[string]any) (int, erro
 			// A failed target carries "error" and no messages.
 			continue
 		}
-		kept := make([]map[string]any, 0, len(msgs))
-		for _, m := range msgs {
-			fits, err := budget.admit(m)
-			if err != nil {
-				return 0, err
-			}
-			if !fits {
-				break
-			}
-			kept = append(kept, m)
+		var kept []map[string]any
+		var err error
+		if latest {
+			kept, err = admitLatest(budget, msgs)
+		} else {
+			kept, err = admitOldest(budget, msgs)
+		}
+		if err != nil {
+			return 0, err
 		}
 		dropped := len(msgs) - len(kept)
 		if dropped > 0 {
@@ -296,7 +329,54 @@ func (t *getMessagesTool) applyResultBudget(results []map[string]any) (int, erro
 	return total, nil
 }
 
-func (t *getMessagesTool) fetchOne(ctx context.Context, tgt messageTarget, includeThread bool, threadLimit int) map[string]any {
+// admitOldest keeps messages from the start of the thread until the budget
+// runs out.
+func admitOldest(budget *resultBudget, msgs []map[string]any) ([]map[string]any, error) {
+	kept := make([]map[string]any, 0, len(msgs))
+	for _, m := range msgs {
+		fits, err := budget.admit(m)
+		if err != nil {
+			return nil, err
+		}
+		if !fits {
+			break
+		}
+		kept = append(kept, m)
+	}
+	return kept, nil
+}
+
+// admitLatest keeps the thread root, then the newest replies that still fit,
+// and returns them oldest-first. The root goes first because it carries what
+// the thread is about; without it the latest replies have no subject.
+func admitLatest(budget *resultBudget, msgs []map[string]any) ([]map[string]any, error) {
+	if len(msgs) == 0 {
+		return msgs, nil
+	}
+	fits, err := budget.admit(msgs[0])
+	if err != nil {
+		return nil, err
+	}
+	if !fits {
+		return []map[string]any{}, nil
+	}
+	start := len(msgs)
+	for start > 1 {
+		fits, err := budget.admit(msgs[start-1])
+		if err != nil {
+			return nil, err
+		}
+		if !fits {
+			break
+		}
+		start--
+	}
+	kept := make([]map[string]any, 0, 1+len(msgs)-start)
+	kept = append(kept, msgs[0])
+	return append(kept, msgs[start:]...), nil
+}
+
+func (t *getMessagesTool) fetchOne(ctx context.Context, tgt messageTarget, includeThread bool, threadLimit int, latest bool) map[string]any {
 	out := map[string]any{
 		"channel_id": tgt.channelID,
 		"ts":         tgt.ts,
@@ -319,6 +399,8 @@ func (t *getMessagesTool) fetchOne(ctx context.Context, tgt messageTarget, inclu
 	limit := threadLimit
 	if !includeThread {
 		limit = 1
+	} else if latest {
+		limit = getMessagesLatestFetchCap
 	}
 	msgs, err := t.fetchReplies(ctx, tgt.channelID, tgt.ts, limit)
 	if err != nil {
@@ -336,6 +418,11 @@ func (t *getMessagesTool) fetchOne(ctx context.Context, tgt messageTarget, inclu
 
 	if !includeThread && len(msgs) > 1 {
 		msgs = msgs[:1]
+	}
+	if includeThread && latest && len(msgs) > threadLimit {
+		// Keep the root and the newest threadLimit-1 replies, so order=latest
+		// returns as many messages as the default order would.
+		msgs = append(msgs[:1:1], msgs[len(msgs)-(threadLimit-1):]...)
 	}
 
 	out["messages"] = convertConversationMessages(msgs, t.limits.MaxTextBytes)

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
@@ -602,4 +603,137 @@ func TestGetMessagesTool_FailedTargetIsNotChargedToTheBudget(t *testing.T) {
 
 	gt.Value(t, out["truncated"]).Equal(false)
 	gt.Value(t, out["omitted"]).Equal(0)
+}
+
+// threadOf returns a thread of n messages whose texts are "m0" (the root)
+// through "m<n-1>" (the newest reply), oldest-first as conversations.replies
+// returns them.
+func threadOf(n int) []slackservice.ConversationMessage {
+	out := make([]slackservice.ConversationMessage, 0, n)
+	for i := 0; i < n; i++ {
+		out = append(out, slackservice.ConversationMessage{
+			UserID: "U1", Text: fmt.Sprintf("m%d", i), Timestamp: fmt.Sprintf("1700000000.%06d", i),
+		})
+	}
+	return out
+}
+
+func textsOf(t *testing.T, result map[string]any) []string {
+	t.Helper()
+	msgs, ok := result["messages"].([]map[string]any)
+	gt.Bool(t, ok).True().Required()
+	out := make([]string, 0, len(msgs))
+	for _, m := range msgs {
+		out = append(out, m["text"].(string))
+	}
+	return out
+}
+
+func TestGetMessagesTool_OrderLatestKeepsRootAndNewestReplies(t *testing.T) {
+	// A thread longer than thread_limit: the default order would return its
+	// first messages, order=latest returns the root and the last replies —
+	// the part a progress check needs to see.
+	var requested int
+	bot := &fakeBotService{
+		getPermalinkFn: func(_ context.Context, channelID, _ string) (string, error) {
+			return "https://example.slack.com/archives/" + channelID + "/p1", nil
+		},
+		getRepliesFn: func(_ context.Context, _, _ string, limit int) ([]slackservice.ConversationMessage, error) {
+			requested = limit
+			return threadOf(10), nil
+		},
+	}
+	tool := pickToolByName(t, slacktool.NewReadOnly(slacktool.Deps{Bot: bot}), "slack__get_messages")
+
+	out, err := tool.Run(context.Background(), map[string]any{
+		"targets":      []any{map[string]any{"channel_id": "C1", "ts": "1700000000.000000"}},
+		"thread_limit": 4,
+		"order":        "latest",
+	})
+	gt.NoError(t, err).Required()
+
+	// Slack returns oldest-first up to limit, so the tail can only be had by
+	// asking for a wider window than thread_limit.
+	gt.Number(t, requested).Equal(1000)
+
+	results, ok := out["results"].([]map[string]any)
+	gt.Bool(t, ok).True().Required()
+	gt.Value(t, textsOf(t, results[0])).Equal([]string{"m0", "m7", "m8", "m9"})
+	gt.Value(t, out["truncated"]).Equal(false)
+}
+
+func TestGetMessagesTool_OrderOldestIsTheDefault(t *testing.T) {
+	var requested int
+	bot := &fakeBotService{
+		getPermalinkFn: func(_ context.Context, channelID, _ string) (string, error) {
+			return "https://example.slack.com/archives/" + channelID + "/p1", nil
+		},
+		getRepliesFn: func(_ context.Context, _, _ string, limit int) ([]slackservice.ConversationMessage, error) {
+			requested = limit
+			return threadOf(limit), nil
+		},
+	}
+	tool := pickToolByName(t, slacktool.NewReadOnly(slacktool.Deps{Bot: bot}), "slack__get_messages")
+
+	out, err := tool.Run(context.Background(), map[string]any{
+		"targets":      []any{map[string]any{"channel_id": "C1", "ts": "1700000000.000000"}},
+		"thread_limit": 3,
+	})
+	gt.NoError(t, err).Required()
+
+	gt.Number(t, requested).Equal(3)
+	results, ok := out["results"].([]map[string]any)
+	gt.Bool(t, ok).True().Required()
+	gt.Value(t, textsOf(t, results[0])).Equal([]string{"m0", "m1", "m2"})
+}
+
+func TestGetMessagesTool_OrderLatestDropsOldestRepliesOverBudget(t *testing.T) {
+	// Over the size bound, order=latest gives up the oldest replies rather
+	// than the newest, keeps the root, and still reports what it dropped.
+	bot := &fakeBotService{
+		getPermalinkFn: func(_ context.Context, channelID, _ string) (string, error) {
+			return "https://example.slack.com/archives/" + channelID + "/p1", nil
+		},
+		getRepliesFn: func(_ context.Context, _, _ string, _ int) ([]slackservice.ConversationMessage, error) {
+			return threadOf(10), nil
+		},
+	}
+	// Each entry encodes to roughly 90 bytes, so 300 bytes holds 3 of the 10.
+	tools := slacktool.NewReadOnly(slacktool.Deps{Bot: bot, Limits: slacktool.Limits{MaxResultBytes: 300}})
+	tool := pickToolByName(t, tools, "slack__get_messages")
+
+	out, err := tool.Run(context.Background(), map[string]any{
+		"targets":      []any{map[string]any{"channel_id": "C1", "ts": "1700000000.000000"}},
+		"thread_limit": 200,
+		"order":        "latest",
+	})
+	gt.NoError(t, err).Required()
+
+	results, ok := out["results"].([]map[string]any)
+	gt.Bool(t, ok).True().Required()
+	got := textsOf(t, results[0])
+	gt.Number(t, len(got)).GreaterOrEqual(2).Required()
+	gt.Number(t, len(got)).Less(10).Required()
+
+	gt.Value(t, got[0]).Equal("m0")
+	gt.Value(t, got[len(got)-1]).Equal("m9")
+	// What is kept is a contiguous tail, oldest-first.
+	for i := 1; i < len(got); i++ {
+		gt.Value(t, got[i]).Equal(fmt.Sprintf("m%d", 10-len(got)+i))
+	}
+
+	gt.Value(t, out["truncated"]).Equal(true)
+	gt.Value(t, out["omitted"]).Equal(10 - len(got))
+	gt.Value(t, results[0]["omitted"]).Equal(10 - len(got))
+}
+
+func TestGetMessagesTool_UnknownOrderIsRejected(t *testing.T) {
+	bot := &fakeBotService{}
+	tool := pickToolByName(t, slacktool.NewReadOnly(slacktool.Deps{Bot: bot}), "slack__get_messages")
+
+	_, err := tool.Run(context.Background(), map[string]any{
+		"targets": []any{map[string]any{"channel_id": "C1", "ts": "1700000000.000000"}},
+		"order":   "newest",
+	})
+	gt.Value(t, err).NotNil()
 }

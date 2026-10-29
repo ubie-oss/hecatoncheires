@@ -123,7 +123,11 @@ a complete one:
   repeats `omitted` on each target that lost messages, so the agent knows which
   thread it is missing. The per-call budget is shared across the targets of one
   call and charged in target order, so the same request returns the same
-  messages every time.
+  messages every time. Which messages a thread gives up depends on its `order`
+  parameter: the default `oldest` keeps the start of the thread and drops the
+  newest replies, while `latest` keeps the thread root and the newest replies
+  and drops the oldest ones. Use `latest` when the agent must see what was said
+  last (for example a progress check deciding whether someone already replied).
 
 Setting either flag to `0` disables that bound; a negative value is rejected at
 startup rather than read as "disabled". The two are independent: the per-message
