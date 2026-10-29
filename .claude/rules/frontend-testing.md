@@ -95,6 +95,14 @@ not merely that the control is present.
   Object selectors stay stable (e.g. the tag editor's suggestion / create
   options), rather than matching on volatile text/structure.
 
+### Checking the screen in a browser
+
+Passing E2E tests do not show how the changed screen looks. Before completing
+a change to what a screen displays, capture the changed states against the
+server `frontend/scripts/e2e.sh` starts and look at them, following the
+`capture-screenshots` skill. The same images go into the PR body
+(`.claude/rules/pr-screenshots.md`), and they show dummy data only.
+
 ### Best Practices
 
 - Use Page Object Pattern to keep tests maintainable
