@@ -150,3 +150,11 @@ catalog.
   description.
 - Update the documentation under `docs/` together with any change to features,
   configuration, flags, environment variables, or required permissions.
+- When a pull request changes what a screen displays, add a `## Screenshots`
+  section with one image per changed state, labelled with the screen, state,
+  language, theme, and viewport width. Capture them against the server
+  `frontend/scripts/e2e.sh` starts, filled with placeholder data written for the
+  capture. Never show data from a real environment, from the issue or report
+  that motivated the change, or from the change's own tests. See
+  [.claude/rules/pr-screenshots.md](.claude/rules/pr-screenshots.md) and
+  [.claude/skills/capture-screenshots/SKILL.md](.claude/skills/capture-screenshots/SKILL.md).

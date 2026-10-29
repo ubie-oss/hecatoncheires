@@ -52,6 +52,9 @@ frontend/test-results/
 frontend/playwright-report/
 frontend/playwright/.cache/
 
+# Pull request screenshot captures (.claude/skills/capture-screenshots)
+frontend/pr-screenshots/
+
 # Logs
 *.log
 

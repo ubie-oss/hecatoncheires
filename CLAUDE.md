@@ -367,6 +367,7 @@ All comment and character literal in source code must be in English
 - Follow Semantic Commit format: `<type>: <subject>` (types: `feat`, `fix`, `refactor`, `test`, `docs`, `chore`, `ci`, `style`, `perf`)
 - Keep PR titles short (under 70 characters); use the body for details
 - **Do NOT include `Co-Authored-By:` trailers in commit messages.** No AI/tool attribution lines. The commit body and PR body should also stay free of "Generated with Claude" style notes
+- **A PR that changes what a screen displays has a `## Screenshots` section**, captured with the `capture-screenshots` skill. **Screenshots show dummy data only, whatever the change is: never use data derived from the change or from the instruction to create what a screenshot shows.** See `.claude/rules/pr-screenshots.md`
 
 ### Repository Write Discipline (NON-NEGOTIABLE)
 
