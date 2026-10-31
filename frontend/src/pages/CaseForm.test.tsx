@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
-import { MockedProvider, type MockedResponse } from '@apollo/client/testing'
+import { HttpLink, split } from '@apollo/client'
+import { MockedProvider, MockLink, type MockedResponse } from '@apollo/client/testing'
 import { GraphQLError } from 'graphql'
 import { MemoryRouter } from 'react-router'
 import { I18nProvider } from '../i18n'
@@ -425,4 +426,66 @@ describe('CaseForm Slack channel source', () => {
     expect(await screen.findByTestId('existing-slack-channel-error')).toHaveTextContent(message)
     await waitFor(() => expect(counter.calls).toBe(2))
   })
+
+  // The server answers these rejections with a non-2xx status and data: null,
+  // which Apollo reports as a network error rather than as graphQLErrors. The
+  // mutation goes through a real HttpLink here so that path is exercised.
+  it.each([
+    [409, 'SLACK_CHANNEL_ALREADY_LINKED', 'This channel is already linked to another case. Choose a different channel.'],
+    [400, 'SLACK_CHANNEL_NOT_LINKABLE', 'This channel cannot be used. Choose a channel that you have joined and that is not archived. For a private channel, also invite the bot.'],
+    [500, 'SLACK_CHANNEL_JOIN_FAILED', 'The bot could not join this channel. Invite the bot to the channel and try again.'],
+  ])('shows %s %s from an HTTP error response under the picker', async (status, code, message) => {
+    const counter = { calls: 0 }
+    renderChannelFormWithCreateResponse(
+      [candidatesMock(counter)],
+      status,
+      { data: null, errors: [{ message: 'rejected', extensions: { code } }] },
+    )
+    await fillTitle()
+    await chooseExistingChannel('incident-db')
+
+    fireEvent.click(screen.getByTestId('case-submit-button'))
+    expect(await screen.findByTestId('existing-slack-channel-error')).toHaveTextContent(message)
+    expect(screen.queryByText(/Response not successful/)).not.toBeInTheDocument()
+    await waitFor(() => expect(counter.calls).toBe(2))
+  })
+
+  it('shows the server message of an unclassified HTTP 500 instead of the status line', async () => {
+    renderChannelFormWithCreateResponse(
+      [candidatesMock({ calls: 0 })],
+      500,
+      { data: null, errors: [{ message: 'createCase: internal failure' }] },
+    )
+    await fillTitle()
+    await chooseExistingChannel('incident-db')
+
+    fireEvent.click(screen.getByTestId('case-submit-button'))
+    expect(await screen.findByText('createCase: internal failure')).toBeInTheDocument()
+    expect(screen.queryByTestId('existing-slack-channel-error')).not.toBeInTheDocument()
+  })
 })
+
+// renderChannelFormWithCreateResponse answers CreateCase through a real
+// HttpLink whose fetch returns the given HTTP status and JSON body; every other
+// operation is answered by the mocks.
+function renderChannelFormWithCreateResponse(extraMocks: MockedResponse[], status: number, body: unknown) {
+  const fetchCreateCase = async () =>
+    new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
+  const link = split(
+    (operation) => operation.operationName === 'CreateCase',
+    new HttpLink({ uri: '/graphql', fetch: fetchCreateCase }),
+    new MockLink(
+      [fieldConfigMock(true), slackUsersMock(), frequentAssigneesMock(), channelStatusMock(), ...extraMocks],
+      false,
+    ),
+  )
+  return render(
+    <MemoryRouter initialEntries={[`/ws/${WORKSPACE_ID}/cases`]}>
+      <MockedProvider link={link} addTypename={false}>
+        <I18nProvider defaultLang="en">
+          <CaseForm caseItem={null} onClose={vi.fn()} />
+        </I18nProvider>
+      </MockedProvider>
+    </MemoryRouter>,
+  )
+}

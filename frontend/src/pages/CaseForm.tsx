@@ -17,6 +17,7 @@ import CustomFieldRenderer from '../components/fields/CustomFieldRenderer'
 import { IconLock, IconFlask } from '../components/Icons'
 import { sanitizeFieldValues } from '../utils/sanitizeFieldValues'
 import { displayName } from '../utils/user'
+import { graphQLErrorsFromApolloError } from '../utils/graphqlErrors'
 
 interface CaseItem {
   id: number
@@ -233,7 +234,8 @@ export default function CaseForm({ caseItem, onClose, onSubmitted }: CaseFormPro
       }
     } catch (e: any) {
       console.error('Case mutation failed', e)
-      const code = e?.graphQLErrors?.[0]?.extensions?.code as keyof typeof existingChannelErrorKeys | undefined
+      const firstError = graphQLErrorsFromApolloError(e)[0]
+      const code = firstError?.extensions?.code as keyof typeof existingChannelErrorKeys | undefined
       if (usingExistingChannel && code && code in existingChannelErrorKeys) {
         setErrors({ existingChannel: t(existingChannelErrorKeys[code], { caseLabelLower: caseLabel.toLowerCase() }) })
         // The chosen channel may have been taken or become unusable; drop it
@@ -241,7 +243,7 @@ export default function CaseForm({ caseItem, onClose, onSubmitted }: CaseFormPro
         setCandidatesRefetchKey((k) => k + 1)
         return
       }
-      const msg = e?.graphQLErrors?.[0]?.message || e?.message || String(e)
+      const msg = firstError?.message || e?.message || String(e)
       setErrors({ submit: msg })
     }
   }
@@ -270,7 +272,7 @@ export default function CaseForm({ caseItem, onClose, onSubmitted }: CaseFormPro
       onClose()
     } catch (e: any) {
       console.error('Draft overwrite failed', e)
-      const msg = e?.graphQLErrors?.[0]?.message || e?.message || String(e)
+      const msg = graphQLErrorsFromApolloError(e)[0]?.message || e?.message || String(e)
       setErrors({ submit: msg })
     }
   }
@@ -301,7 +303,7 @@ export default function CaseForm({ caseItem, onClose, onSubmitted }: CaseFormPro
       navigate(`/ws/${currentWorkspace.id}/cases`)
     } catch (e: any) {
       console.error('Save-as-draft mutation failed', e)
-      const msg = e?.graphQLErrors?.[0]?.message || e?.message || String(e)
+      const msg = graphQLErrorsFromApolloError(e)[0]?.message || e?.message || String(e)
       setErrors({ submit: msg })
     }
   }

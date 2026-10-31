@@ -129,6 +129,23 @@ export class CaseFormPage extends BasePage {
   }
 
   /**
+   * Switch the Slack channel source to "existing channel" and pick the named
+   * channel from the picker.
+   */
+  async selectExistingChannel(name: string): Promise<void> {
+    await this.page.getByTestId('case-channel-source-existing').click();
+    await this.page.getByRole('combobox', { name: 'Slack channel' }).click();
+    await this.page.getByRole('option', { name }).click();
+  }
+
+  /**
+   * The error shown under the existing-channel picker.
+   */
+  getExistingChannelError(): Locator {
+    return this.page.getByTestId('existing-slack-channel-error');
+  }
+
+  /**
    * Fill a custom field by field ID
    * Automatically detects if it's a select or input field
    */

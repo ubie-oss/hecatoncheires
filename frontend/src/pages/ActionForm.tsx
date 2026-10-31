@@ -13,6 +13,7 @@ import { useAssigneeCandidates } from '../hooks/useAssigneeCandidates'
 import Modal from '../components/Modal'
 import Button from '../components/Button'
 import { displayName } from '../utils/user'
+import { graphQLErrorsFromApolloError } from '../utils/graphqlErrors'
 
 interface ActionItem {
   id: number
@@ -132,7 +133,7 @@ export default function ActionForm({ action, defaultCaseID, onClose }: ActionFor
       onClose()
     } catch (e: any) {
       console.error('Action mutation failed', e)
-      const msg = e?.graphQLErrors?.[0]?.message || e?.message || String(e)
+      const msg = graphQLErrorsFromApolloError(e)[0]?.message || e?.message || String(e)
       setErrors({ submit: msg })
     }
   }
