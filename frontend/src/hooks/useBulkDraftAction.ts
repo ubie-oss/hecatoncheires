@@ -3,6 +3,7 @@ import { useApolloClient, type ApolloError, type ApolloClient } from '@apollo/cl
 import type { GraphQLFormattedError } from 'graphql'
 
 import { SUBMIT_DRAFT, DISCARD_DRAFT } from '../graphql/drafts'
+import { graphQLErrorsFromApolloError } from '../utils/graphqlErrors'
 import {
   DRAFT_ERROR_CODE,
   DRAFT_EXT_KEY,
@@ -87,18 +88,21 @@ export function graphQLErrorToBulkError(err: GraphQLFormattedError): BulkActionE
 // apolloErrorToBulkErrors flattens an ApolloError into the per-error
 // records the result dialog renders. Both graphQLErrors and networkError
 // (when present) are surfaced so a single mutation that fails on multiple
-// axes does not get its error list silently truncated.
+// axes does not get its error list silently truncated. A networkError that
+// is only the non-2xx status of a response carrying GraphQL errors is not
+// reported again as NETWORK: those errors already describe the failure.
 export function apolloErrorToBulkErrors(err: unknown): BulkActionError[] {
   if (!err) return []
   const out: BulkActionError[] = []
 
   const apollo = err as Partial<ApolloError> & { message?: string }
-  const gqlErrors = apollo.graphQLErrors ?? []
+  const gqlErrors = graphQLErrorsFromApolloError(err)
   for (const ge of gqlErrors) {
-    out.push(graphQLErrorToBulkError(ge as GraphQLFormattedError))
+    out.push(graphQLErrorToBulkError(ge))
   }
   const network = apollo.networkError
-  if (network) {
+  const errorsCameFromNetworkResult = (apollo.graphQLErrors?.length ?? 0) === 0 && gqlErrors.length > 0
+  if (network && !errorsCameFromNetworkResult) {
     const msg = (network as Error).message || 'network error'
     out.push({ code: DRAFT_ERROR_CODE.NETWORK, message: msg })
   }

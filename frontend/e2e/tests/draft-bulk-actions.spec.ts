@@ -193,4 +193,34 @@ test.describe('Bulk draft actions (Drafts tab)', () => {
     await caseListPage.fillSearchFilter(draftTitle);
     expect(await caseListPage.caseExists(draftTitle)).toBeFalsy();
   });
+
+  // The server rejects SubmitDraft with HTTP 400 and data: null, so the
+  // MISSING_REQUIRED_FIELDS code reaches the client only through the error
+  // response body, not through Apollo's graphQLErrors.
+  test('bulk submit of a draft missing a required field names the field', async ({ page }) => {
+    const caseListPage = new CaseListPage(page);
+    const caseFormPage = new CaseFormPage(page);
+
+    const tag = Date.now();
+    const draftTitle = `bulk-submit-missing ${tag}`;
+    await createDraft(page, caseListPage, caseFormPage, draftTitle);
+
+    await caseListPage.clickStatusTab('Draft');
+    await caseListPage.getCaseRowByTitle(draftTitle).locator('input[type="checkbox"]').check();
+    await page.getByTestId('bulk-submit-button').click();
+
+    await expect(page.getByTestId('bulk-result-dialog-body')).toBeVisible();
+    const failureList = page.getByTestId('bulk-result-failure-list');
+    await expect(failureList).toContainText(draftTitle);
+    await expect(failureList).toContainText(/Required fields are missing: .*category/i);
+    await expect(failureList).not.toContainText('Network error');
+    await page.getByTestId('bulk-result-close-button').click();
+
+    // The draft was not promoted.
+    await page.reload();
+    await caseListPage.waitForTableLoad();
+    await caseListPage.clickStatusTab('Draft');
+    await caseListPage.fillSearchFilter(draftTitle);
+    expect(await caseListPage.caseExists(draftTitle)).toBeTruthy();
+  });
 });

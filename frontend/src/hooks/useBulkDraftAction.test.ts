@@ -146,6 +146,24 @@ describe('apolloErrorToBulkErrors', () => {
     ])
   })
 
+  // The server answers a rejected submitDraft with a non-2xx status and
+  // data: null; Apollo then reports it as a ServerError with the errors on
+  // networkError.result instead of graphQLErrors.
+  it('classifies the GraphQL errors of a non-2xx response instead of reporting NETWORK', () => {
+    const networkError = Object.assign(new Error('Response not successful: Received status code 400'), {
+      name: 'ServerError',
+      statusCode: 400,
+      result: {
+        data: null,
+        errors: [mkGqlError('MISSING_REQUIRED_FIELDS', 'missing', { missingFieldNames: ['Severity'] })],
+      },
+    })
+    const out = apolloErrorToBulkErrors(new ApolloError({ networkError }))
+    expect(out).toEqual([
+      { code: DRAFT_ERROR_CODE.MISSING_REQUIRED_FIELDS, message: 'missing', missingFieldNames: ['Severity'] },
+    ])
+  })
+
   it('falls back to INTERNAL for plain Error', () => {
     const out = apolloErrorToBulkErrors(new Error('boom'))
     expect(out).toHaveLength(1)

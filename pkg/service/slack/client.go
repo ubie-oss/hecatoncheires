@@ -437,7 +437,7 @@ func (c *client) InviteUsersToChannel(ctx context.Context, channelID string, use
 	var failedIDs []string
 	var failureReasons []string
 	for _, uid := range userIDs {
-		if err := c.inviteOneUser(ctx, channelID, uid); err != nil {
+		if err := c.inviteOneUser(ctx, channelID, uid); err != nil && !isAlreadyInChannel(err) {
 			failedIDs = append(failedIDs, uid)
 			failureReasons = append(failureReasons, err.Error())
 		}
@@ -452,6 +452,14 @@ func (c *client) InviteUsersToChannel(ctx context.Context, channelID string, use
 		goerr.V("failure_reasons", failureReasons),
 		goerr.V("attempted_user_ids", userIDs),
 	)
+}
+
+// isAlreadyInChannel reports whether Slack refused an invite because the user
+// is a member already. The user ends up in the channel either way, and an
+// existing channel linked to a case routinely holds people the case invites.
+func isAlreadyInChannel(err error) bool {
+	var resp slack.SlackErrorResponse
+	return errors.As(err, &resp) && resp.Err == "already_in_channel"
 }
 
 // inviteOneUser performs a single-user invite with one rate-limit

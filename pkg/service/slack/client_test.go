@@ -494,6 +494,43 @@ func TestInviteUsersToChannel_AllSuccess_ReturnsNil(t *testing.T) {
 	gt.Number(t, fake.calls).Equal(2)
 }
 
+// Linking an existing channel invites people who may already be members; that
+// leaves them in the channel, which is what the invite is for.
+func TestInviteUsersToChannel_AlreadyInChannelIsNotAFailure(t *testing.T) {
+	fake := &inviteFake{
+		failingUsers: map[string]string{
+			"U_MEMBER": "already_in_channel",
+			"U_BAD":    "user_not_found",
+		},
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/conversations.invite", fake.handler())
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	svc, err := slack.NewWithAPIURLForTest("xoxb-test", srv.URL+"/")
+	gt.NoError(t, err).Required()
+
+	t.Run("only already-in-channel users", func(t *testing.T) {
+		err := svc.InviteUsersToChannel(context.Background(), "C_TARGET", []string{"U_MEMBER", "U_NEW"})
+		gt.NoError(t, err)
+	})
+
+	t.Run("other failures are still reported without the member", func(t *testing.T) {
+		err := svc.InviteUsersToChannel(context.Background(), "C_TARGET", []string{"U_MEMBER", "U_BAD"})
+		gt.Value(t, err).NotNil().Required()
+
+		var ge *goerr.Error
+		gt.Bool(t, errors.As(err, &ge)).True().Required()
+		values := ge.Values()
+		gt.Value(t, values["failed_user_ids"]).Equal([]string{"U_BAD"})
+		reasons, ok := values["failure_reasons"].([]string)
+		gt.Bool(t, ok).True().Required()
+		gt.Array(t, reasons).Length(1).Required()
+		gt.String(t, reasons[0]).Contains("user_not_found")
+	})
+}
+
 func TestInviteUsersToChannel_EmptyList_NoApiCall(t *testing.T) {
 	fake := &inviteFake{}
 	mux := http.NewServeMux()
