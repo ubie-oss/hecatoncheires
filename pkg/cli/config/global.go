@@ -144,6 +144,9 @@ func LoadWorkspaceGroups(paths []string) ([]*model.WorkspaceGroup, error) {
 			return nil, goerr.Wrap(err, "failed to read global config file", goerr.V(ConfigPathKey, f))
 		}
 
+		if err := ValidateJobExecutionTOML(data); err != nil {
+			return nil, goerr.Wrap(err, "invalid job execution config", goerr.V(ConfigPathKey, f))
+		}
 		var gc GlobalConfig
 		if err := toml.Unmarshal(data, &gc); err != nil {
 			return nil, goerr.Wrap(err, "failed to parse global config TOML", goerr.V(ConfigPathKey, f))
@@ -334,6 +337,9 @@ func LoadExportConfig(paths []string) (*ExportSection, error) {
 			return nil, goerr.Wrap(err, "failed to read global config file", goerr.V(ConfigPathKey, f))
 		}
 
+		if err := ValidateJobExecutionTOML(data); err != nil {
+			return nil, goerr.Wrap(err, "invalid job execution config", goerr.V(ConfigPathKey, f))
+		}
 		var gc GlobalConfig
 		if err := toml.Unmarshal(data, &gc); err != nil {
 			return nil, goerr.Wrap(err, "failed to parse global config TOML", goerr.V(ConfigPathKey, f))
@@ -608,6 +614,9 @@ func loadGlobalConfigFile(path string) (*GlobalConfig, error) {
 		return nil, goerr.Wrap(err, "failed to read global config file",
 			goerr.V(ConfigPathKey, path))
 	}
+	if err := ValidateJobExecutionTOML(data); err != nil {
+		return nil, goerr.Wrap(err, "invalid job execution config", goerr.V(ConfigPathKey, path))
+	}
 	var gc GlobalConfig
 	if err := toml.Unmarshal(data, &gc); err != nil {
 		return nil, goerr.Wrap(err, "failed to parse global config TOML",
@@ -665,16 +674,18 @@ func ValidateJobModels(defs []agentkernel.ModelDef, ws *model.WorkspaceRegistry)
 			continue
 		}
 		for _, j := range entry.Jobs {
-			if j == nil || j.Disabled || j.LLMModel == "" {
+			if j == nil || j.Disabled {
 				continue
 			}
-			if _, ok := known[j.LLMModel]; !ok {
-				return goerr.Wrap(ErrUnknownLLMModelRef,
-					"job references an undefined model",
-					goerr.V(WorkspaceIDKey, entry.Workspace.ID),
-					goerr.V("job_id", j.ID),
-					goerr.V(LLMModelRefKey, j.LLMModel),
-					goerr.V("known", slices.Sorted(maps.Keys(known))))
+			for _, ref := range j.ModelRefs() {
+				if _, ok := known[ref]; !ok {
+					return goerr.Wrap(ErrUnknownLLMModelRef,
+						"job references an undefined model",
+						goerr.V(WorkspaceIDKey, entry.Workspace.ID),
+						goerr.V("job_id", j.ID),
+						goerr.V(LLMModelRefKey, ref),
+						goerr.V("known", slices.Sorted(maps.Keys(known))))
+				}
 			}
 		}
 	}

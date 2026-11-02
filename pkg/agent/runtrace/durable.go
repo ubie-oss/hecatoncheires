@@ -69,6 +69,11 @@ func FinishRun(
 		return
 	}
 
+	// A suspended run can terminate through cancellation without being resumed.
+	// Terminal records must not retain a live question or its response target.
+	log.PendingInteraction = nil
+	log.AgentProcessID = ""
+	log.AgentAwaitKey = ""
 	log.EndedAt = endedAt
 	log.InputTokens += usage.InputTokens
 	log.OutputTokens += usage.OutputTokens

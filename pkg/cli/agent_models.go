@@ -195,7 +195,7 @@ func newLLMSetup(ctx context.Context, llmCfg *config.LLM, defs []agentkernel.Mod
 		"default_budget", budget.USD(),
 		"default_budget_source", source,
 	)
-	return llmSetup{Default: defaultClient, Policy: policy}, nil
+	return llmSetup{Default: policy.WrapClient(defaultRef, defaultClient), Policy: policy}, nil
 }
 
 // jobModelRefs returns the model reference names the registry's enabled Jobs
@@ -213,14 +213,16 @@ func jobModelRefs(registry *model.WorkspaceRegistry) []string {
 			continue
 		}
 		for _, j := range ws.Jobs {
-			if j == nil || j.Disabled || j.LLMModel == "" {
+			if j == nil || j.Disabled {
 				continue
 			}
-			if _, dup := seen[j.LLMModel]; dup {
-				continue
+			for _, ref := range j.ModelRefs() {
+				if _, dup := seen[ref]; dup {
+					continue
+				}
+				seen[ref] = struct{}{}
+				refs = append(refs, ref)
 			}
-			seen[j.LLMModel] = struct{}{}
-			refs = append(refs, j.LLMModel)
 		}
 	}
 	slices.Sort(refs)

@@ -118,7 +118,7 @@ func defaultToolSets(name agentkit.AgentName) ([]string, error) {
 		return agent.KnownToolSetIDsWorkspaceChannel, nil
 	case AgentAssist:
 		return agent.KnownToolSetIDsAssist, nil
-	case AgentJob, AgentJobSimple:
+	case AgentJob, AgentJobSimple, AgentJobCascadeMain:
 		return agent.KnownToolSetIDsJob, nil
 	case AgentProposal:
 		return agent.KnownToolSetIDsProposal, nil
@@ -155,6 +155,13 @@ func NewToolFactory(d ToolDeps) (agentkit.ToolFactory, error) {
 			return nil, nil
 		}
 
+		if proc.Agent == AgentJobCascade {
+			return nil, nil
+		}
+		if sc.delegatesJobReads() && proc.Agent == AgentJob {
+			return nil, nil
+		}
+
 		resolver, err := d.resolverFor(ctx, sc)
 		if err != nil {
 			return nil, goerr.Wrap(err, "build the process tool resolver",
@@ -181,7 +188,9 @@ func NewToolFactory(d ToolDeps) (agentkit.ToolFactory, error) {
 			}
 			ids = readOnly
 		}
-		return resolver.Resolve(ids), nil
+		tools := resolver.Resolve(ids)
+
+		return tools, nil
 	}, nil
 }
 
@@ -252,6 +261,21 @@ func (p *ToolSetProbe) Available(ctx context.Context, sc Scope, palette []string
 	if p == nil {
 		return palette, nil
 	}
+	// Keep the existing Job vocabulary and additionally offer its read-only
+	// halves, so investigation tasks need not receive mixed read/write sets.
+	// The factory still enforces the explicit sets each task is granted.
+	if sc.offersReadOnlyJobSets() && sc.JobID != "" {
+		readOnly, err := agent.ReadOnlyToolSetIDs(palette)
+		if err != nil {
+			return nil, goerr.Wrap(err, "resolve the job's read-only toolsets")
+		}
+		palette = slices.Clone(palette)
+		for _, id := range readOnly {
+			if !slices.Contains(palette, id) {
+				palette = append(palette, id)
+			}
+		}
+	}
 	resolver, err := p.deps.resolverFor(ctx, sc)
 	if err != nil {
 		return nil, goerr.Wrap(err, "build the tool resolver for the scope")
@@ -263,6 +287,28 @@ func (p *ToolSetProbe) Available(ctx context.Context, sc Scope, palette []string
 		}
 	}
 	return out, nil
+}
+
+// ReadOnlyNames resolves the actual read tools for a scope. Cascade pins these
+// names before Spawn and treats any other tool as a write before executing it.
+func (p *ToolSetProbe) ReadOnlyNames(ctx context.Context, sc Scope, palette []string) ([]string, error) {
+	if p == nil {
+		return nil, nil
+	}
+	ids, err := agent.ReadOnlyToolSetIDs(palette)
+	if err != nil {
+		return nil, goerr.Wrap(err, "resolve read-only job palette")
+	}
+	resolver, err := p.deps.resolverFor(ctx, sc)
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, tool := range resolver.Resolve(ids) {
+		names = append(names, tool.Spec().Name)
+	}
+	slices.Sort(names)
+	return slices.Compact(names), nil
 }
 
 // buildToolSetDeps flavours every toolset for one Process's scope. It is the

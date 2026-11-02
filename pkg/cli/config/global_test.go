@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/m-mizutani/gt"
@@ -14,6 +15,27 @@ import (
 	"github.com/m-mizutani/hecatoncheires/pkg/utils/pricing"
 	"github.com/urfave/cli/v3"
 )
+
+func TestGlobalLoadersRejectObsoleteJobExecution(t *testing.T) {
+	loaders := map[string]func([]string) error{
+		"workspace groups": func(paths []string) error { _, err := config.LoadWorkspaceGroups(paths); return err },
+		"export":           func(paths []string) error { _, err := config.LoadExportConfig(paths); return err },
+		"models":           func(paths []string) error { _, err := config.LoadLLMModels(paths); return err },
+		"agent":            func(paths []string) error { _, err := config.LoadAgentSection(paths); return err },
+	}
+	for name, load := range loaders {
+		t.Run(name, func(t *testing.T) {
+			path := writeGlobalConfig(t, "obsolete.toml", "[job_execution]\nmode = 'cascade'\n")
+			if err := load([]string{path}); err == nil || !strings.Contains(err.Error(), "invalid job execution config") {
+				t.Fatalf("global loader silently accepted obsolete job_execution: %v", err)
+			}
+			path = writeGlobalConfig(t, "legacy.toml", "historically_unknown = 'accepted'\n[agent]\nbudget_usd = 1\n")
+			if err := load([]string{path}); err != nil {
+				t.Fatalf("global loader changed legacy unknown-key handling: %v", err)
+			}
+		})
+	}
+}
 
 // writeGlobalConfig writes content to a temp .toml file and returns its path.
 func writeGlobalConfig(t *testing.T, name, content string) string {
@@ -795,5 +817,42 @@ func TestValidateJobModels(t *testing.T) {
 
 	t.Run("a nil registry passes", func(t *testing.T) {
 		gt.NoError(t, config.ValidateJobModels(defs, nil))
+	})
+	for _, role := range []string{"main", "sub", "advisor"} {
+		t.Run("undefined execution role "+role, func(t *testing.T) {
+			models := model.JobExecutionModels{Main: "cheap", Sub: "cheap", Advisor: "cheap"}
+			switch role {
+			case "main":
+				models.Main = "undefined"
+			case "sub":
+				models.Sub = "undefined"
+			case "advisor":
+				models.Advisor = "undefined"
+			}
+			reg := registryWithJob(&model.Job{ID: "daily", Execution: &model.JobExecution{Models: models}})
+			gt.Error(t, config.ValidateJobModels(defs, reg)).Is(config.ErrUnknownLLMModelRef)
+		})
+	}
+	t.Run("execution roles use concrete model names without aliases", func(t *testing.T) {
+		var named []agentkernel.ModelDef
+		for _, name := range []string{"example-main-1", "example-sub-1", "example-advisor-1"} {
+			section := config.LLMModelSection{Provider: "openai", Model: name, InputUSDPerMTok: 1, OutputUSDPerMTok: 2}
+			def, err := section.Validate()
+			gt.NoError(t, err).Required()
+			gt.Value(t, def.Ref).Equal(name)
+			named = append(named, def)
+		}
+		reg := registryWithJob(&model.Job{ID: "example", Execution: &model.JobExecution{
+			Mode: model.JobExecutionModeOrchestrator, Cascade: true,
+			Models: model.JobExecutionModels{Main: named[0].Ref, Sub: named[1].Ref, Advisor: named[2].Ref},
+		}})
+		gt.NoError(t, config.ValidateJobModels(named, reg))
+	})
+
+	t.Run("all execution roles defined", func(t *testing.T) {
+		reg := registryWithJob(&model.Job{ID: "daily", Execution: &model.JobExecution{
+			Models: model.JobExecutionModels{Main: "cheap", Sub: "cheap", Advisor: "cheap"},
+		}})
+		gt.NoError(t, config.ValidateJobModels(defs, reg))
 	})
 }

@@ -132,3 +132,29 @@ func TestFinishRunAccumulatesCostAcrossTurns(t *testing.T) {
 	gt.Value(t, log.CostNanoUSD).Equal(int64(1_250_000))
 	gt.String(t, log.Model).Equal("gemini-3.7-flash")
 }
+
+func TestFinishRunClearsSuspendedInteractionOnCancellation(t *testing.T) {
+	ctx := context.Background()
+	repo := memory.New()
+	started := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	openDurableRun(t, repo, started)
+	log, err := repo.JobRunLog().Get(ctx, durableKey(), "run-abc")
+	gt.NoError(t, err).Required()
+	log.Stage = model.JobRunStageAwaitingInput
+	log.AgentProcessID = "process"
+	log.AgentAwaitKey = "question"
+	log.PendingInteraction = &model.PendingInteraction{
+		PostedChannelID: "C-CASE", PostedMessageTS: "question-ts", Reason: "A choice is required",
+		Items: []model.PendingInteractionItem{{ID: "environment", Text: "Which environment?", Type: "free_text"}},
+	}
+	gt.NoError(t, repo.JobRunLog().Finish(ctx, log)).Required()
+	runtrace.FinishRun(ctx, repo, durableKey(), "run-abc", runtrace.Usage{LLMCalls: 3, CostNanoUSD: 60000}, goerr.New("operator cancelled"), started.Add(time.Minute))
+	finished, err := repo.JobRunLog().Get(ctx, durableKey(), "run-abc")
+	gt.NoError(t, err).Required()
+	gt.Value(t, finished.Stage).Equal(model.JobRunStageFailed)
+	gt.Value(t, finished.PendingInteraction).Nil()
+	gt.String(t, finished.AgentProcessID).Equal("")
+	gt.String(t, finished.AgentAwaitKey).Equal("")
+	gt.Value(t, finished.LLMCallCount).Equal(int64(3))
+	gt.Value(t, finished.CostNanoUSD).Equal(int64(60000))
+}

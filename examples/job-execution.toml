@@ -1,0 +1,25 @@
+# Independent configuration example. No real case data or service identifiers.
+# Define these concrete model IDs in the global [[llm_model]] entries without
+# aliases before enabling the job. Credentials do not belong in either file.
+
+[workspace]
+id = "automation-example"
+name = "Automation example"
+
+[[job]]
+id = "review_open_work"
+name = "Review open work"
+strategy = "simple"
+events.scheduled = { every = "1h" }
+prompt = "Read the case context and summarize outstanding work. Preserve existing fields unless an update is explicitly requested."
+budget_usd = 1.0
+
+[job.execution]
+mode = "orchestrator"
+cascade = true
+apply_to = ["job", "job-simple"]
+
+[job.execution.models]
+main = "claude-haiku-5-5"
+sub = "claude-haiku-5-5"
+advisor = "claude-sonnet-5-5"

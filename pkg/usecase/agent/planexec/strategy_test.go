@@ -2961,3 +2961,33 @@ func TestOutputRoundTrip(t *testing.T) {
 	gt.Array(t, got.Observations).Length(1).Required()
 	gt.String(t, got.Observations[0].Results[0].Summary).Equal("ok")
 }
+
+func TestPlannerHandoffIsExplicitAndOptIn(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("enabled=%t", enabled), func(t *testing.T) {
+			handoff := &gollem.FunctionCall{ID: "transfer", Name: "request_handoff", Arguments: map[string]any{"reason": "conflict"}}
+			replies := []any{handoff}
+			if !enabled {
+				replies = append(replies, `{"finalize":{"reason":"complete"}}`, "normal completion")
+			}
+			planner := &toolCallingPlanner{replies: replies}
+			rt := newTextRuntime(t, planner.client(), generousBudget(), nil, nil)
+			input := textInput()
+			if enabled {
+				input.HandoffTool = &gollem.ToolSpec{Name: "request_handoff", Description: "Transfer control to the host", Parameters: map[string]*gollem.Parameter{"reason": {Type: gollem.TypeString, Required: true, Enum: []string{"conflict"}}}}
+			}
+			proc := rt.run(t, input, nil)
+			gt.Value(t, proc.Status).Equal(agentkit.ProcessSucceeded)
+			out := decodeText(t, proc.Output)
+			if enabled {
+				gt.Value(t, out.Kind).Equal(planexec.OutputHandoff)
+				gt.String(t, out.HandoffReason).Equal("conflict")
+				gt.Array(t, planner.seen()).Length(1)
+			} else {
+				gt.Value(t, out.Kind).Equal(planexec.OutputFinal)
+				gt.String(t, out.Text).Equal("normal completion")
+				gt.Array(t, planner.seen()).Length(3)
+			}
+		})
+	}
+}

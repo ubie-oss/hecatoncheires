@@ -532,3 +532,25 @@ func TestRootLimiterReadsTheProcess(t *testing.T) {
 	rich := &agentkit.Process{Metadata: map[string]string{"tier": "rich"}}
 	gt.Value(t, limit(ctx, rich, m).Kind()).Equal(agentkit.LimitKindPass)
 }
+
+func TestMeasuredSpendOverridesFoldedTokenRate(t *testing.T) {
+	spent := pricing.FromUSD(0.1)
+	resolve := func(*agentkit.Process) budget.RunLimit {
+		return budget.RunLimit{Budget: pricing.FromUSD(1), Rate: pricing.Rate{Input: 1000, Output: 5000}, Spent: &spent}
+	}
+	root := budget.Root{MaxSteps: 100, NoticeRatio: 0.8}.Limiter(resolve)
+	// The combined tokens would cost $10 at the parent rate, but the ledger
+	// already measured them on a mixture of models at $0.10.
+	m := agentkit.Metrics{InputTokens: 10_000_000}
+	if got := root(context.Background(), &agentkit.Process{}, m); got.Kind() != agentkit.LimitKindPass {
+		gt.Bool(t, false).Describef("premature notice: %v", got).True().Required()
+	}
+	spent = pricing.FromUSD(0.9)
+	if got := root(context.Background(), &agentkit.Process{}, m); got.Kind() != agentkit.LimitKindNotice {
+		gt.Bool(t, false).Describef("missing actual-spend notice: %v", got).True().Required()
+	}
+	spent = -1
+	if got := root(context.Background(), &agentkit.Process{}, m); got.Kind() != agentkit.LimitKindStop {
+		gt.Bool(t, false).Describef("negative spend accepted: %v", got).True().Required()
+	}
+}

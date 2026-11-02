@@ -560,6 +560,10 @@ func (r *JobRunner) Run(ctx context.Context, j *model.Job, ev Event) error {
 	// unrunnable: the wiring stops registering an executor for a strategy the
 	// moment its agent exists.
 	onDurableRuntime := r.deps.Durable.handles(strategy, j.Interactive)
+	if resolvedExecution(j, strategy) != nil && !onDurableRuntime {
+		return r.recordPrepareFailure(ctx, key, goerr.New("job execution policy requires the durable runtime",
+			goerr.V("job_id", j.ID)))
+	}
 	var executor job.JobExecutor
 	if !onDurableRuntime {
 		found, execLookupErr := r.deps.executorFor(strategy)

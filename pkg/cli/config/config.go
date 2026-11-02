@@ -725,6 +725,9 @@ func LoadFieldSchema(path string) (*domainConfig.FieldSchema, error) {
 			goerr.V(ConfigPathKey, path))
 	}
 
+	if err := ValidateJobExecutionTOML(data); err != nil {
+		return nil, goerr.Wrap(err, "invalid job execution config", goerr.V(ConfigPathKey, path))
+	}
 	var config AppConfig
 	if err := toml.Unmarshal(data, &config); err != nil {
 		return nil, goerr.Wrap(err, "failed to parse TOML config",
@@ -889,6 +892,9 @@ func parseWorkspaceConfig(src WorkspaceConfigSource) (*WorkspaceConfig, error) {
 	path := src.Name
 	baseDir := src.BaseDir
 
+	if err := ValidateJobExecutionTOML(src.Data); err != nil {
+		return nil, goerr.Wrap(err, "invalid job execution config", goerr.V(ConfigPathKey, path))
+	}
 	var appCfg AppConfig
 	if err := toml.Unmarshal(src.Data, &appCfg); err != nil {
 		return nil, goerr.Wrap(err, "failed to parse TOML config", goerr.V(ConfigPathKey, path))

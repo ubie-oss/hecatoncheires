@@ -3,8 +3,19 @@ package job_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
+
+	"github.com/gollem-dev/agentkit"
+	agentprocmemory "github.com/gollem-dev/agentkit/repository/memory"
+	"github.com/gollem-dev/gollem"
+	"github.com/gollem-dev/gollem/mock"
+	"github.com/m-mizutani/goerr/v2"
+	"github.com/m-mizutani/hecatoncheires/pkg/agent/budget"
+	"github.com/m-mizutani/hecatoncheires/pkg/usecase/agent/planexec"
+	slackgo "github.com/slack-go/slack"
 	"testing"
 	"time"
 
@@ -15,6 +26,7 @@ import (
 	"github.com/m-mizutani/hecatoncheires/pkg/i18n"
 	"github.com/m-mizutani/hecatoncheires/pkg/repository/agentarchive"
 	"github.com/m-mizutani/hecatoncheires/pkg/usecase/job"
+	"github.com/m-mizutani/hecatoncheires/pkg/utils/async"
 	"github.com/m-mizutani/hecatoncheires/pkg/utils/pricing"
 )
 
@@ -469,4 +481,438 @@ func TestCaseTaskContext_WithoutACaseCarriesOnlyTheKey(t *testing.T) {
 	gt.NoError(t, err).Required()
 	gt.Bool(t, strings.Contains(rendered, "slack_channel_id")).False()
 	gt.Bool(t, strings.Contains(rendered, "slack_thread_ts")).False()
+}
+
+func TestDurableExecutionPolicySelectsFromBaseStrategy(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		strategy model.JobStrategy
+		mode     model.JobExecutionMode
+		cascade  bool
+		target   model.JobExecutionTarget
+		agent    agentkit.AgentName
+		active   bool
+	}{
+		{"simple standard keeps strategy", model.JobStrategySimple, model.JobExecutionModeStandard, false, model.JobExecutionTargetJobSimple, agentkernel.AgentJobSimple, true},
+		{"combined starts controller", model.JobStrategySimple, model.JobExecutionModeOrchestrator, true, model.JobExecutionTargetJobSimple, agentkernel.AgentJobCascade, true},
+		{"excluded combined keeps strategy", model.JobStrategySimple, model.JobExecutionModeOrchestrator, true, model.JobExecutionTargetJob, agentkernel.AgentJobSimple, false},
+		{"simple orchestrator promotes", model.JobStrategySimple, model.JobExecutionModeOrchestrator, false, model.JobExecutionTargetJobSimple, agentkernel.AgentJob, true},
+		{"planexec cascade starts controller", model.JobStrategyPlanexec, model.JobExecutionModeStandard, true, model.JobExecutionTargetJob, agentkernel.AgentJobCascade, true},
+		{"simple cascade starts controller", model.JobStrategySimple, model.JobExecutionModeStandard, true, model.JobExecutionTargetJobSimple, agentkernel.AgentJobCascade, true},
+		{"excluded simple remains legacy", model.JobStrategySimple, model.JobExecutionModeOrchestrator, false, model.JobExecutionTargetJob, agentkernel.AgentJobSimple, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			repo, c := setupCase(t, "ws")
+			j := &model.Job{ID: "configured", Prompt: "check the case", Strategy: tt.strategy, LLMModel: "test", Events: model.JobEvents{Scheduled: &model.ScheduledEventConfig{Every: time.Hour}}, Execution: &model.JobExecution{Mode: tt.mode, Cascade: tt.cascade, ApplyTo: []model.JobExecutionTarget{tt.target}, Models: model.JobExecutionModels{Advisor: "test"}}}
+			registry := model.NewWorkspaceRegistry()
+			registry.Register(&model.WorkspaceEntry{Workspace: model.Workspace{ID: "ws"}, Jobs: []*model.Job{j}})
+			llm := singleReplyLLM("done", 10, 5)
+			d := &job.DurableRuntime{History: agentarchive.NewMemoryHistoryStore(), Models: testModelPolicy(t)}
+			runner := job.NewJobRunner(job.RunnerDeps{Repo: repo, Registry: registry, LLMClient: llm, Durable: d})
+			k := bindDurableJobRuntime(t, runner, d, repo, registry, llm)
+			gt.NoError(t, runner.Run(ctx, j, job.Event{Domain: model.JobEventDomainScheduled, WorkspaceID: "ws", CaseID: c.ID, Timestamp: time.Now()})).Required()
+			busy, err := d.Locator.Busy(ctx, agentkernel.JobRunSubject("ws", c.ID, j.ID))
+			gt.NoError(t, err).Required()
+			gt.Value(t, busy).NotNil().Required()
+			proc, err := k.GetProcess(ctx, busy.ProcessID)
+			gt.NoError(t, err).Required()
+			gt.Value(t, proc.Agent).Equal(tt.agent)
+			sc := agentkernel.ScopeFrom(proc.Metadata)
+			gt.Value(t, sc.JobExecution != nil).Equal(tt.active)
+			if tt.active {
+				gt.String(t, sc.JobExecution.Models.Main).Equal("test")
+				gt.String(t, sc.JobExecution.Models.Sub).Equal("test")
+				j.Execution.Models.Main = "changed"
+				gt.String(t, sc.JobExecution.Models.Main).Equal("test")
+			}
+			if tt.mode == model.JobExecutionModeOrchestrator && tt.active && !tt.cascade {
+				var st struct {
+					Input struct {
+						SystemPrompt string `json:"system_prompt"`
+						AllowDirect  bool   `json:"allow_direct"`
+					} `json:"input"`
+				}
+				gt.NoError(t, json.Unmarshal(proc.State, &st)).Required()
+				gt.String(t, st.Input.SystemPrompt).Contains("Orchestrated execution")
+				gt.Bool(t, st.Input.AllowDirect).False()
+			}
+		})
+	}
+}
+
+func TestDurableCascadeCompletesLogicalRunAndReflectionOnce(t *testing.T) {
+	ctx := context.Background()
+	repo, c := setupCaseWithSlack(t, "ws", "C-CASE", "thread")
+	j := &model.Job{ID: "cascade", Prompt: "check the case", Reflection: true, Events: model.JobEvents{Scheduled: &model.ScheduledEventConfig{Every: time.Hour}}, Execution: &model.JobExecution{Mode: model.JobExecutionModeStandard, Cascade: true, ApplyTo: []model.JobExecutionTarget{model.JobExecutionTargetJobSimple}, Models: model.JobExecutionModels{Main: "test", Advisor: "test"}}}
+	registry := model.NewWorkspaceRegistry()
+	registry.Register(&model.WorkspaceEntry{Workspace: model.Workspace{ID: "ws"}, Jobs: []*model.Job{j}})
+	var calls atomic.Int32
+	llm := &mock.LLMClientMock{NewSessionFunc: func(context.Context, ...gollem.SessionOption) (gollem.Session, error) {
+		return &mock.SessionMock{
+			GenerateFunc: func(context.Context, []gollem.Input, ...gollem.GenerateOption) (*gollem.Response, error) {
+				if calls.Add(1) == 1 {
+					return &gollem.Response{InputToken: 10, OutputToken: 5, FunctionCalls: []*gollem.FunctionCall{{ID: "handoff", Name: "job__request_advisor", Arguments: map[string]any{"reason": "conflict"}}}}, nil
+				}
+				return &gollem.Response{InputToken: 10, OutputToken: 5, Texts: []string{"advisor completed"}}, nil
+			},
+			HistoryFunc: func() (*gollem.History, error) {
+				return &gollem.History{LLType: gollem.LLMTypeOpenAI, Version: gollem.HistoryVersion}, nil
+			},
+		}, nil
+	}}
+	reflector := &fakeReflector{}
+	notifier := &fakeNotifier{}
+	j.Execution.Models.Advisor = "advisor"
+	models, err := agentkernel.NewModelPolicy(agentkernel.ModelPolicyInput{
+		Defs: []agentkernel.ModelDef{
+			{Ref: "test", Provider: agentkernel.ProviderClaude, Model: "main-model", Rate: pricing.Rate{Input: 1000, Output: 5000}},
+			{Ref: "advisor", Provider: agentkernel.ProviderClaude, Model: "advisor-model", Rate: pricing.Rate{Input: 10000, Output: 50000}},
+		},
+		DefaultRef: "test", DefaultBudget: pricing.FromUSD(100),
+		Clients: map[string]gollem.LLMClient{"advisor": singleReplyLLM("advisor completed", 10, 5)},
+	})
+	gt.NoError(t, err).Required()
+	d := &job.DurableRuntime{History: agentarchive.NewMemoryHistoryStore(), Models: models}
+	runner := job.NewJobRunner(job.RunnerDeps{Repo: repo, Registry: registry, LLMClient: llm, Durable: d, Reflector: reflector, SlackNotifier: notifier})
+	k := bindDurableJobRuntime(t, runner, d, repo, registry, llm)
+	d.TrackSpawns()
+	gt.NoError(t, runner.Run(ctx, j, job.Event{Domain: model.JobEventDomainScheduled, WorkspaceID: "ws", CaseID: c.ID, Timestamp: time.Now()})).Required()
+	busy, err := d.Locator.Busy(ctx, agentkernel.JobRunSubject("ws", c.ID, j.ID))
+	gt.NoError(t, err).Required()
+	gt.Value(t, busy).NotNil().Required()
+	gt.NoError(t, d.Drain(ctx)).Required()
+	logs, err := repo.JobRunLog().List(ctx, model.JobRunKey{WorkspaceID: "ws", CaseID: c.ID, JobID: j.ID}, 10)
+	gt.NoError(t, err).Required()
+	gt.Array(t, logs).Length(1).Required()
+	gt.Value(t, logs[0].Stage).Equal(model.JobRunStageSuccess)
+	gt.Value(t, calls.Load()).Equal(int32(1))
+	gt.Value(t, logs[0].LLMCallCount).Equal(int64(2))
+	gt.Array(t, reflector.calls).Length(1)
+	gt.Array(t, notifier.snapshot()).Length(2)
+	gt.Value(t, logs[0].CostNanoUSD).Equal(int64(385000))
+	usage := executionUsageRecords(t, k, busy.ProcessID)
+	gt.Array(t, usage).Length(2)
+	for _, call := range usage {
+		gt.String(t, call.Phase).NotEqual("")
+		gt.String(t, call.Phase).NotEqual("unknown")
+	}
+}
+
+func TestExecutionPolicyRefusesLegacyFallbackWithoutDurable(t *testing.T) {
+	j := &model.Job{ID: "configured", Prompt: "review the case", Events: model.JobEvents{Scheduled: &model.ScheduledEventConfig{Every: time.Hour}}}
+	j.Execution = &model.JobExecution{Mode: model.JobExecutionModeStandard, ApplyTo: []model.JobExecutionTarget{model.JobExecutionTargetJobSimple}}
+	executor := &recordingExecutor{}
+	runner, _, c := newRunner(t, "ws", []*model.Job{j}, executor)
+	err := runner.RunManual(context.Background(), "ws", c.ID, j.ID, "operator")
+	gt.Value(t, err).NotNil().Required()
+	gt.Value(t, executor.calls.Load()).Equal(int32(0))
+}
+
+// executionScript supplies provider responses without accessing a real service.
+type executionScript struct {
+	responses []*gollem.Response
+	calls     atomic.Int32
+}
+
+func (s *executionScript) client() gollem.LLMClient {
+	return &mock.LLMClientMock{NewSessionFunc: func(context.Context, ...gollem.SessionOption) (gollem.Session, error) {
+		return &mock.SessionMock{
+			GenerateFunc: func(context.Context, []gollem.Input, ...gollem.GenerateOption) (*gollem.Response, error) {
+				i := int(s.calls.Add(1)) - 1
+				if i >= len(s.responses) {
+					return nil, goerr.New("unexpected execution test generation")
+				}
+				return s.responses[i], nil
+			},
+			HistoryFunc: func() (*gollem.History, error) {
+				return &gollem.History{LLType: gollem.LLMTypeOpenAI, Version: gollem.HistoryVersion}, nil
+			},
+		}, nil
+	}}
+}
+
+type executionPoster struct {
+	calls  atomic.Int32
+	before func()
+}
+
+func (p *executionPoster) PostMessage(context.Context, string, []slackgo.Block, string) (string, error) {
+	if p.before != nil {
+		p.before()
+	}
+	p.calls.Add(1)
+	return "posted", nil
+}
+func (p *executionPoster) PostThreadMessage(ctx context.Context, channel, thread string, blocks []slackgo.Block, text string) (string, error) {
+	return p.PostMessage(ctx, channel, blocks, text)
+}
+
+func executionTask(toolset string) *gollem.Response {
+	return cascadeText(fmt.Sprintf(`{"tasks":[{"id":"work","title":"Review case","description":"Inspect the case and follow the assigned scope","acceptance_criteria":"Return precise evidence and outcomes","tools":[%q],"budget_usd":0.1}]}`, toolset))
+}
+
+func TestDurableCombinedCascadeAccountsForBothSubtrees(t *testing.T) {
+	for _, tc := range []struct {
+		name                                              string
+		writeBeforeHandoff, unknownUsage, exhaustedBudget bool
+	}{
+		{name: "handoff retains cheap workers"},
+		{name: "descendant write prevents fresh advisor", writeBeforeHandoff: true},
+		{name: "unknown usage prevents fresh advisor", unknownUsage: true},
+		{name: "exhausted shared budget prevents advisor", exhaustedBudget: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			repo, c := setupCaseWithSlack(t, "ws", "C-GENERIC", "thread")
+			j := &model.Job{ID: "combined", Prompt: "Review case evidence and report the result", Budget: pricing.FromUSD(1), Reflection: true, Events: model.JobEvents{Scheduled: &model.ScheduledEventConfig{Every: time.Hour}}, Execution: &model.JobExecution{Mode: model.JobExecutionModeOrchestrator, Cascade: true, ApplyTo: []model.JobExecutionTarget{model.JobExecutionTargetJobSimple}, Models: model.JobExecutionModels{Main: "main", Sub: "sub", Advisor: "advisor"}}}
+			registry := model.NewWorkspaceRegistry()
+			registry.Register(&model.WorkspaceEntry{Workspace: model.Workspace{ID: "ws"}, Jobs: []*model.Job{j}})
+			set := "core_ro"
+			if tc.writeBeforeHandoff {
+				set = "slack_post"
+			}
+			main := &executionScript{responses: []*gollem.Response{executionTask(set), cascadeCalls(job.CascadeEscalationToolNameForTest)}}
+			if tc.exhaustedBudget {
+				main.responses = []*gollem.Response{cascadeCalls(job.CascadeEscalationToolNameForTest)}
+				main.responses[0].InputToken = 1000000
+				main.responses[0].OutputToken = 500000
+			}
+			if tc.unknownUsage {
+				main.responses = []*gollem.Response{cascadeCalls(job.CascadeEscalationToolNameForTest)}
+				main.responses[0].InputToken = 0
+				main.responses[0].OutputToken = 0
+			}
+			write := &gollem.Response{InputToken: 10, OutputToken: 5, FunctionCalls: []*gollem.FunctionCall{{ID: "post", Name: "slack__post_to_case_channel", Arguments: map[string]any{"text": "The generic case review is complete."}}}}
+			sub := &executionScript{responses: []*gollem.Response{cascadeText("Evidence includes a conflicting revision."), write, cascadeText("The exact requested message was posted.")}}
+			if tc.writeBeforeHandoff {
+				sub.responses = []*gollem.Response{write, cascadeText("The exact requested message was posted.")}
+			}
+			advisor := &executionScript{responses: []*gollem.Response{executionTask("slack_post"), cascadeText(`{"finalize":{"reason":"verified"}}`), cascadeText("Review completed.")}}
+			models, err := agentkernel.NewModelPolicy(agentkernel.ModelPolicyInput{
+				Defs: []agentkernel.ModelDef{
+					{Ref: "main", Provider: agentkernel.ProviderClaude, Model: "main-model", Rate: pricing.Rate{Input: 1000, Output: 5000}},
+					{Ref: "sub", Provider: agentkernel.ProviderClaude, Model: "sub-model", Rate: pricing.Rate{Input: 100, Output: 500}},
+					{Ref: "advisor", Provider: agentkernel.ProviderClaude, Model: "advisor-model", Rate: pricing.Rate{Input: 10000, Output: 50000}},
+				}, DefaultRef: "main", DefaultBudget: pricing.FromUSD(1), Clients: map[string]gollem.LLMClient{"sub": sub.client(), "advisor": advisor.client()},
+			})
+			gt.NoError(t, err).Required()
+			d := &job.DurableRuntime{History: agentarchive.NewMemoryHistoryStore(), Models: models}
+			notifier := &fakeNotifier{}
+			reflector := &fakeReflector{}
+			runner := job.NewJobRunner(job.RunnerDeps{Repo: repo, Registry: registry, LLMClient: main.client(), Durable: d, SlackNotifier: notifier, Reflector: reflector})
+			reg := agentkit.NewRegistry()
+			cfg := budget.Config{MaxSteps: 128, MaxInputTokens: 100000, MaxOutputTokens: 100000, NoticeRatio: 0.8}
+			rootLimit := budget.Root{MaxSteps: 128, NoticeRatio: 0.8}
+			task, err := agentkernel.RegisterTaskAgent(reg, cfg.Limiter(models.Resolve), d.History)
+			gt.NoError(t, err).Required()
+			gt.NoError(t, d.Register(reg, rootLimit.Limiter(models.Resolve), task)).Required()
+			procRepo := agentprocmemory.New()
+			d.Locator, err = agentkernel.NewLocator(procRepo)
+			gt.NoError(t, err).Required()
+			poster := &executionPoster{}
+			tools := agentkernel.ToolDeps{Repo: repo, Registry: registry, SlackPoster: poster}
+			probe, err := agentkernel.NewToolSetProbe(tools)
+			gt.NoError(t, err).Required()
+			k, err := agentkernel.Build(agentkernel.Deps{Repo: procRepo, History: d.History, LLM: main.client(), Trace: agentarchive.NewMemoryTraceRepository(), Tools: tools, Budgets: agentkernel.Budgets{Root: rootLimit, Task: cfg}, Models: models, Agents: reg})
+			gt.NoError(t, err).Required()
+			d.Bind(k, probe)
+			d.AttachRunner(runner)
+			d.TrackSpawns()
+			gt.NoError(t, runner.Run(ctx, j, job.Event{Domain: model.JobEventDomainScheduled, WorkspaceID: "ws", CaseID: c.ID, Timestamp: time.Now()})).Required()
+			busy, err := d.Locator.Busy(ctx, agentkernel.JobRunSubject("ws", c.ID, j.ID))
+			gt.NoError(t, err).Required()
+			gt.Value(t, busy).NotNil().Required()
+			rootID := busy.ProcessID
+			poster.before = func() {
+				written, err := models.CascadeWriteStarted(ctx, rootID)
+				gt.NoError(t, err)
+				gt.Value(t, written).Equal(tc.writeBeforeHandoff)
+			}
+			gt.NoError(t, d.Drain(ctx, agentkit.WithPollInterval(time.Millisecond))).Required()
+			logs, err := repo.JobRunLog().List(ctx, model.JobRunKey{WorkspaceID: "ws", CaseID: c.ID, JobID: j.ID}, 10)
+			gt.NoError(t, err).Required()
+			gt.Array(t, logs).Length(1).Required()
+			gt.Array(t, notifier.snapshot()).Length(2)
+			rootProc, err := k.GetProcess(ctx, rootID)
+			gt.NoError(t, err).Required()
+			var state job.CascadeStateForTest
+			gt.NoError(t, json.Unmarshal(rootProc.State, &state)).Required()
+			mainProc, err := k.GetProcess(ctx, state.MainID)
+			gt.NoError(t, err).Required()
+			gt.Value(t, mainProc.Agent).Equal(agentkernel.AgentJob)
+			gt.Value(t, agentkernel.ScopeFrom(mainProc.Metadata).Budget).Equal(pricing.FromUSD(0.5))
+			if tc.writeBeforeHandoff || tc.unknownUsage || tc.exhaustedBudget {
+				gt.Value(t, logs[0].Stage).Equal(model.JobRunStageFailed)
+				gt.Value(t, advisor.calls.Load()).Equal(int32(0))
+				gt.Value(t, state.AdvisorID).Equal(agentkit.ProcessID(""))
+				gt.Array(t, reflector.calls).Length(0)
+				if tc.writeBeforeHandoff {
+					gt.Value(t, poster.calls.Load()).Equal(int32(1))
+				} else {
+					gt.Value(t, poster.calls.Load()).Equal(int32(0))
+					gt.Value(t, sub.calls.Load()).Equal(int32(0))
+				}
+				return
+			}
+			gt.Value(t, logs[0].Stage).Equal(model.JobRunStageSuccess)
+			gt.Value(t, logs[0].LLMCallCount).Equal(int64(8))
+			gt.Value(t, logs[0].CostNanoUSD).Equal(int64(1130500))
+			gt.Value(t, poster.calls.Load()).Equal(int32(1))
+			gt.Array(t, reflector.calls).Length(1)
+			gt.Value(t, state.MainCost).Equal(pricing.NanoUSD(73500))
+			advisorProc, err := k.GetProcess(ctx, state.AdvisorID)
+			gt.NoError(t, err).Required()
+			gt.Value(t, advisorProc.Agent).Equal(agentkernel.AgentJob)
+			gt.Value(t, advisorProc.InheritedHistory).Nil()
+			gt.Value(t, agentkernel.ScopeFrom(advisorProc.Metadata).Budget).Equal(pricing.FromUSD(1) - state.MainCost)
+			var advisorInput struct {
+				Input planexec.Input `json:"input"`
+			}
+			gt.NoError(t, json.Unmarshal(advisorProc.State, &advisorInput)).Required()
+			gt.Value(t, advisorInput.Input.HandoffTool).Nil()
+			gt.String(t, advisorInput.Input.SystemPrompt).NotContains("Advisor handoff")
+			usage := executionUsageRecords(t, k, rootID)
+			gt.Array(t, usage).Length(8)
+			var total pricing.NanoUSD
+			owners := map[agentkernel.StageRole]bool{}
+			for _, call := range usage {
+				gt.String(t, call.RootID).Equal(string(rootID))
+				gt.String(t, call.RunID).Equal(logs[0].RunID)
+				gt.Bool(t, call.UsageKnown).True()
+				total += call.CostNanoUSD
+				proc, err := k.GetProcess(ctx, agentkit.ProcessID(call.ProcessID))
+				gt.NoError(t, err).Required()
+				scope := agentkernel.ScopeFrom(proc.Metadata)
+				if proc.Agent == agentkernel.AgentTask {
+					gt.String(t, call.ModelRef).Equal("sub")
+					gt.Value(t, scope.StageRole).Equal(agentkernel.StageRoleSub)
+					gt.Value(t, scope.Budget).Equal(pricing.FromUSD(0.1))
+					owners[scope.StageOwner] = true
+				}
+			}
+			gt.Value(t, total).Equal(pricing.NanoUSD(logs[0].CostNanoUSD))
+			gt.Bool(t, owners[agentkernel.StageRoleMain]).True()
+			gt.Bool(t, owners[agentkernel.StageRoleAdvisor]).True()
+		})
+	}
+}
+
+// executionUsage is a read-only projection of the durable SDK billing events.
+type executionUsage struct {
+	ProcessID   string          `json:"process_id"`
+	RootID      string          `json:"root_id"`
+	RunID       string          `json:"run_id"`
+	Phase       string          `json:"phase"`
+	ModelRef    string          `json:"model_ref"`
+	CostNanoUSD pricing.NanoUSD `json:"cost_nano_usd"`
+	UsageKnown  bool            `json:"usage_known"`
+}
+
+func executionUsageRecords(t *testing.T, k *agentkit.Kernel, rootID agentkit.ProcessID) []executionUsage {
+	t.Helper()
+	events, err := k.ListEvents(context.Background(), rootID)
+	gt.NoError(t, err).Required()
+	var records []executionUsage
+	for _, event := range events {
+		if event.Type != "hecatoncheires.usage.completed" {
+			continue
+		}
+		var record executionUsage
+		gt.NoError(t, json.Unmarshal(event.Payload, &record)).Required()
+		records = append(records, record)
+	}
+	return records
+}
+
+func TestDurableExecutionCancellationRestoresUsageAfterWorkerStops(t *testing.T) {
+	ctx := context.Background()
+	j := &model.Job{
+		ID: "interactive-cancel", Prompt: "Identify the affected environment",
+		Strategy: model.JobStrategyPlanexec, Interactive: true,
+		Events:    model.JobEvents{Case: &model.CaseEventConfig{On: []model.CaseLifecycle{model.CaseLifecycleCreated}}},
+		Execution: &model.JobExecution{Mode: model.JobExecutionModeStandard, ApplyTo: []model.JobExecutionTarget{model.JobExecutionTargetJob}, Models: model.JobExecutionModels{Main: "test", Sub: "test"}},
+	}
+	repo, c := setupCaseWithSlack(t, "ws", "C-CASE", "thread")
+	registry := model.NewWorkspaceRegistry()
+	registry.Register(&model.WorkspaceEntry{Workspace: model.Workspace{ID: "ws"}, Jobs: []*model.Job{j}})
+	llm := scriptedReplyLLM(
+		`{"tasks":[{"id":"read","title":"Review case","description":"Read the case","acceptance_criteria":"Identify the environment","tools":["core_job"],"budget_usd":0.01}]}`,
+		"The case does not identify the environment.",
+		`{"question":{"reason":"The environment is required","items":[{"id":"environment","text":"Which environment?","type":"select","options":["staging","production"]}]}}`,
+	)
+	models := testModelPolicy(t)
+	d := &job.DurableRuntime{History: agentarchive.NewMemoryHistoryStore(), Models: models}
+	runner := job.NewJobRunner(job.RunnerDeps{Repo: repo, Registry: registry, LLMClient: llm, Durable: d, InteractionPoster: &recordingQuestionPoster{}})
+	k := bindDurableJobRuntime(t, runner, d, repo, registry, llm)
+	key := model.JobRunKey{WorkspaceID: "ws", CaseID: c.ID, JobID: j.ID}
+	gt.NoError(t, runner.Run(ctx, j, job.Event{Domain: model.JobEventDomainCase, WorkspaceID: "ws", CaseID: c.ID, Timestamp: time.Now(), CaseLifecycle: model.CaseLifecycleCreated})).Required()
+	serveCtx, stop := context.WithCancel(ctx)
+	defer stop()
+	served := make(chan error, 1)
+	async.DispatchCancelable(serveCtx, func(ctx context.Context) error {
+		served <- agentkernel.Serve(ctx, k, agentkit.WithPollInterval(time.Millisecond))
+		return nil
+	})
+	suspended := awaitJobRunLogStage(t, repo, key, model.JobRunStageAwaitingInput)
+	stop()
+	serveErr := <-served
+	gt.Bool(t, serveErr == nil || errors.Is(serveErr, context.Canceled)).True()
+	async.Wait()
+	pid := agentkit.ProcessID(suspended.AgentProcessID)
+	proc, err := k.GetProcess(ctx, pid)
+	gt.NoError(t, err).Required()
+	gt.Value(t, proc.Status).Equal(agentkit.ProcessWaiting)
+	// There are no active claims: the callback must reload persisted billing
+	// evidence instead of depending on another request's process-local cache.
+	_, known := models.UsageCost(agentkernel.ScopeFrom(proc.Metadata))
+	gt.Bool(t, known).False()
+	gt.NoError(t, k.Cancel(ctx, pid, "Cancelled by the operator")).Required()
+	logs, err := repo.JobRunLog().List(ctx, key, 10)
+	gt.NoError(t, err).Required()
+	gt.Array(t, logs).Length(1).Required()
+	gt.Value(t, logs[0].Stage).Equal(model.JobRunStageFailed)
+	gt.Value(t, logs[0].LLMCallCount).Equal(int64(3))
+	gt.Value(t, logs[0].CostNanoUSD).Equal(int64(60000))
+	gt.Array(t, executionUsageRecords(t, k, pid)).Length(3)
+	_, known = models.UsageCost(agentkernel.ScopeFrom(proc.Metadata))
+	gt.Bool(t, known).False()
+}
+
+func TestDurableExecutionCancellationBeforeAnyClaimKeepsKnownZeroUsage(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		mode    model.JobExecutionMode
+		cascade bool
+	}{
+		{name: "simple", mode: model.JobExecutionModeStandard},
+		{name: "orchestrator", mode: model.JobExecutionModeOrchestrator},
+		{name: "cascade", mode: model.JobExecutionModeOrchestrator, cascade: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			repo, c := setupCase(t, "ws")
+			j := &model.Job{ID: "cancel-pending", Prompt: "Review case evidence", Events: model.JobEvents{Scheduled: &model.ScheduledEventConfig{Every: time.Hour}}, Execution: &model.JobExecution{Mode: tc.mode, Cascade: tc.cascade, ApplyTo: []model.JobExecutionTarget{model.JobExecutionTargetJobSimple}, Models: model.JobExecutionModels{Main: "test", Sub: "test", Advisor: "test"}}}
+			registry := model.NewWorkspaceRegistry()
+			registry.Register(&model.WorkspaceEntry{Workspace: model.Workspace{ID: "ws"}, Jobs: []*model.Job{j}})
+			script := &executionScript{}
+			llm := script.client()
+			d := &job.DurableRuntime{History: agentarchive.NewMemoryHistoryStore(), Models: testModelPolicy(t)}
+			runner := job.NewJobRunner(job.RunnerDeps{Repo: repo, Registry: registry, LLMClient: llm, Durable: d})
+			k := bindDurableJobRuntime(t, runner, d, repo, registry, llm)
+			gt.NoError(t, runner.Run(ctx, j, job.Event{Domain: model.JobEventDomainScheduled, WorkspaceID: "ws", CaseID: c.ID, Timestamp: time.Now()})).Required()
+			busy, err := d.Locator.Busy(ctx, agentkernel.JobRunSubject("ws", c.ID, j.ID))
+			gt.NoError(t, err).Required()
+			gt.Value(t, busy).NotNil().Required()
+			gt.NoError(t, k.Cancel(ctx, busy.ProcessID, "Cancelled before execution")).Required()
+			logs, err := repo.JobRunLog().List(ctx, model.JobRunKey{WorkspaceID: "ws", CaseID: c.ID, JobID: j.ID}, 10)
+			gt.NoError(t, err).Required()
+			gt.Array(t, logs).Length(1).Required()
+			gt.Value(t, logs[0].Stage).Equal(model.JobRunStageFailed)
+			gt.Value(t, logs[0].CostNanoUSD).Equal(int64(0))
+			gt.String(t, logs[0].Error).NotContains("accounting_unknown")
+			gt.Value(t, script.calls.Load()).Equal(int32(0))
+		})
+	}
 }

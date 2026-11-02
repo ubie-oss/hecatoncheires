@@ -471,8 +471,12 @@ They are **not detected** — which is different from not implemented:
 - **`[[job]]`, Source and Tag references.** Sources and Tags are stored entities
   rather than configuration, and a `JobRun` left behind by a deleted `[[job]]`
   falls under the removed-definition rule above.
-- **A Job's `llm_model` and `budget_usd`.** Neither is stored on an entity, so
-  there is nothing persisted to reconcile: an undefined model reference is
+- **A Job's `llm_model`, `execution` policy and `budget_usd`.** These configure
+  future runs rather than Case or Action fields. Execution policies and model
+  references captured in an agent Process are snapshots of that run, including
+  the policy's orchestration mode, cascade setting and role references. They are
+  not reconciled against a later workspace configuration. An undefined model
+  reference is
   reported by `hecatoncheires validate` itself (without `--check-db`) and refused
   at startup. A run record naming a model the configuration no longer declares is
   a historical fact about that run, not an inconsistency.

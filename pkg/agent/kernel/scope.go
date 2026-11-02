@@ -4,6 +4,7 @@
 package kernel
 
 import (
+	"encoding/json"
 	"maps"
 	"slices"
 	"strconv"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/m-mizutani/goerr/v2"
 
+	"github.com/m-mizutani/hecatoncheires/pkg/domain/model"
 	"github.com/m-mizutani/hecatoncheires/pkg/utils/pricing"
 )
 
@@ -39,6 +41,9 @@ const (
 	metaProposalID   = "proposal_id"
 	metaLLMModel     = "llm_model"
 	metaBudget       = "budget_nano_usd"
+	metaJobExecution = "job_execution"
+	metaStageRole    = "stage_role"
+	metaStageOwner   = "stage_owner"
 )
 
 // ToolSetsAll is the toolsets value meaning "everything this agent kind is
@@ -136,6 +141,14 @@ type Scope struct {
 	// client AND the default price together — carrying a rate here would let it
 	// generate with one model while being metered at another's.
 	LLMModel string
+	// JobExecution is a resolved, job-local policy pinned before Spawn. A child
+	// inherits this snapshot, so a later workspace edit cannot change its models.
+	JobExecution *model.JobExecution
+	// StageRole selects the model for a job's current execution stage. Empty
+	// means main; task children use sub unless they are in the advisor stage.
+	StageRole StageRole
+	// StageOwner retains the supervising stage when task children select Sub.
+	StageOwner StageRole
 	// Budget is the greatest amount this run may spend. Zero means "not
 	// specified", and the deployment's default budget applies.
 	Budget pricing.NanoUSD
@@ -193,6 +206,27 @@ func (s Scope) Validate() error {
 	if s.Budget < 0 {
 		return goerr.New("budget must not be negative", goerr.V("budget", int64(s.Budget)))
 	}
+	if s.JobExecution != nil {
+		if s.JobID == "" {
+			return goerr.New("job execution requires a job id")
+		}
+		if err := s.JobExecution.Validate(); err != nil {
+			return goerr.Wrap(err, "invalid pinned job execution")
+		}
+	}
+	switch s.StageOwner {
+	case "", StageRoleMain, StageRoleAdvisor:
+	default:
+		return goerr.New("invalid job execution stage owner")
+	}
+	switch s.StageRole {
+	case "", StageRoleMain, StageRoleSub, StageRoleAdvisor:
+	default:
+		return goerr.New("invalid job execution stage role")
+	}
+	if (s.StageRole != "" || s.StageOwner != "") && (s.JobID == "" || s.JobExecution == nil) {
+		return goerr.New("job execution stage role requires a pinned job execution")
+	}
 	// The reference name is NOT checked against the defined models here: the
 	// scope does not know the set. Existence is checked at startup and by
 	// `validate`, and a run naming a model this build cannot resolve falls back
@@ -234,6 +268,12 @@ func (s Scope) Metadata() map[string]string {
 		m[metaSlotGated] = "1"
 	}
 	put(metaLLMModel, s.LLMModel)
+	if s.JobExecution != nil {
+		encoded, _ := json.Marshal(s.JobExecution)
+		put(metaJobExecution, string(encoded))
+	}
+	put(metaStageRole, string(s.StageRole))
+	put(metaStageOwner, string(s.StageOwner))
 	if s.Budget > 0 {
 		m[metaBudget] = strconv.FormatInt(int64(s.Budget), 10)
 	}
@@ -249,6 +289,16 @@ func (s Scope) Metadata() map[string]string {
 func ScopeFrom(m map[string]string) Scope {
 	caseID, _ := strconv.ParseInt(m[metaCaseID], 10, 64)
 	budget, _ := strconv.ParseInt(m[metaBudget], 10, 64)
+	var execution *model.JobExecution
+	if raw := m[metaJobExecution]; raw != "" {
+		var value model.JobExecution
+		// Preserve the presence of an invalid policy. Dropping it would silently
+		// turn a pinned run back into legacy model and tool selection.
+		if json.Unmarshal([]byte(raw), &value) != nil {
+			value = model.JobExecution{}
+		}
+		execution = &value
+	}
 	return Scope{
 		WorkspaceID:  m[metaWorkspaceID],
 		CaseID:       caseID,
@@ -269,6 +319,9 @@ func ScopeFrom(m map[string]string) Scope {
 		EventType:    m[metaEventType],
 		SlotGated:    m[metaSlotGated] == "1",
 		LLMModel:     m[metaLLMModel],
+		JobExecution: execution,
+		StageRole:    StageRole(m[metaStageRole]),
+		StageOwner:   StageRole(m[metaStageOwner]),
 		Budget:       pricing.NanoUSD(budget),
 	}
 }
