@@ -55,7 +55,7 @@ case edit is never answered with "I lack that tool".
 | Tool | R/W | Purpose | Notes |
 |------|-----|---------|-------|
 | `case__update_case` | W | Update title / description / custom field values. | Title and description are **full replacements** — review current values (shown in the system prompt) before overwriting. Cannot change status or assignees. Unknown field ids and type / option mismatches are rejected with a correctable error. |
-| `case__assign` | W | Add assignee(s) by delta (set union). | Rejects user ids absent from the SlackUser store. |
+| `case__assign` | W | Add assignee(s) by delta (set union). | Rejects user ids that neither the SlackUser store nor Slack (`users.info`) knows as a human, non-deleted user. |
 | `case__unassign` | W | Remove assignee(s) by delta (set difference). | Does **not** reject unknown ids (a since-deleted user must stay removable). Applied atomically server-side, so concurrent edits never clobber. |
 | `case__update_case_status` | W | Move the case to another board status (a closed status closes the case). | Thread-mode only — present when the workspace has a configured case status set (`CaseStatusSet`). The parameter enumerates the configured status ids. The result carries `previous_board_status` and `changed` alongside `board_status`, so a call that set the status the case already had is recognisable as a no-op; nothing else reports one, since the thread announcement is emitted only on a real change. **See [Guardrails](#guardrails): Jobs are instructed not to close; the human-driven mention agent may.** |
 | `case__close_case` | W | Mark the case done by closing it (`OPEN` -> `CLOSED`); takes no parameters. | Channel-mode only — the counterpart of `case__update_case_status`, built when the workspace has **no** `CaseStatusSet`. Exactly one "mark done" tool is offered per mode. Closing an already-closed or draft case is rejected with a correctable error. |
@@ -81,7 +81,7 @@ closes a Case by moving it to a closed board status:
 | `case__get_case` | R | both | Fetch one case by `case_id`. | Denied for a private case the user is not a member of. |
 | `case__create_case` | W | both | Create a new case (channel mode: dedicated channel + invites + welcome; thread mode: a new thread in the monitored channel). | Reporter is the mentioning user. |
 | `case__update_case` | W | both | Update a case's title / description / fields (`case_id`). | Cannot change assignees — use `case__assign` / `case__unassign`. |
-| `case__assign` | W | both | Add assignee(s) to a case by delta (`case_id`, set union). | Rejects user ids absent from the SlackUser store. |
+| `case__assign` | W | both | Add assignee(s) to a case by delta (`case_id`, set union). | Rejects user ids that neither the SlackUser store nor Slack (`users.info`) knows as a human, non-deleted user. |
 | `case__unassign` | W | both | Remove assignee(s) from a case by delta (`case_id`, set difference). | Unknown ids are not rejected (a since-deleted user must stay removable). |
 | `case__close_case` | W | channel | Close a case (`case_id`). | Channel mode only — built when the workspace has **no** `CaseStatusSet`. |
 | `case__update_case_status` | W | thread | Move a case to another board status (`case_id`, `status`); a closed status closes it. | Thread mode only — the counterpart of `case__close_case`. The `status` parameter enumerates the configured status ids. The result carries `previous_board_status` and `changed`, as in the case-bound tool above. Exactly one "mark done" tool is offered per mode. |

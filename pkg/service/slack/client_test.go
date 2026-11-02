@@ -401,6 +401,76 @@ func TestGetChannelInfo_ClassifiesUnavailableChannels(t *testing.T) {
 	})
 }
 
+func TestGetUserInfo_ClassifiesUsers(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/users.info", func(w http.ResponseWriter, r *http.Request) {
+		gt.NoError(t, r.ParseForm()).Required()
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Form.Get("user") {
+		case "U_HUMAN":
+			_, _ = w.Write([]byte(`{"ok":true,"user":{"id":"U_HUMAN","name":"human","locale":"ja-JP","profile":{"display_name":"Human","email":"human@example.com"}}}`))
+		case "U_BOT":
+			_, _ = w.Write([]byte(`{"ok":true,"user":{"id":"U_BOT","name":"bot","is_bot":true}}`))
+		case "U_DELETED":
+			_, _ = w.Write([]byte(`{"ok":true,"user":{"id":"U_DELETED","name":"gone","deleted":true}}`))
+		case "U_MISSING":
+			_, _ = w.Write([]byte(`{"ok":false,"error":"user_not_found"}`))
+		case "U_HIDDEN":
+			_, _ = w.Write([]byte(`{"ok":false,"error":"user_not_visible"}`))
+		default:
+			_, _ = w.Write([]byte(`{"ok":false,"error":"internal_error"}`))
+		}
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	svc, err := slack.NewWithAPIURLForTest("xoxb-test", srv.URL+"/")
+	gt.NoError(t, err).Required()
+	ctx := context.Background()
+
+	t.Run("maps a human user", func(t *testing.T) {
+		user, err := svc.GetUserInfo(ctx, "U_HUMAN")
+		gt.NoError(t, err).Required()
+		gt.Value(t, user.ID).Equal("U_HUMAN")
+		gt.Value(t, user.Name).Equal("human")
+		gt.Value(t, user.RealName).Equal("Human")
+		gt.Value(t, user.Email).Equal("human@example.com")
+		gt.Value(t, user.Locale).Equal("ja-JP")
+		gt.Bool(t, user.IsBot).False()
+		gt.Bool(t, user.Deleted).False()
+	})
+
+	t.Run("flags a bot user", func(t *testing.T) {
+		user, err := svc.GetUserInfo(ctx, "U_BOT")
+		gt.NoError(t, err).Required()
+		gt.Bool(t, user.IsBot).True()
+		gt.Bool(t, user.Deleted).False()
+	})
+
+	t.Run("flags a deleted user", func(t *testing.T) {
+		user, err := svc.GetUserInfo(ctx, "U_DELETED")
+		gt.NoError(t, err).Required()
+		gt.Bool(t, user.Deleted).True()
+		gt.Bool(t, user.IsBot).False()
+	})
+
+	t.Run("user_not_found is ErrUserNotFound", func(t *testing.T) {
+		_, err := svc.GetUserInfo(ctx, "U_MISSING")
+		gt.Error(t, err).Is(slack.ErrUserNotFound)
+	})
+
+	t.Run("user_not_visible is ErrUserNotFound", func(t *testing.T) {
+		_, err := svc.GetUserInfo(ctx, "U_HIDDEN")
+		gt.Error(t, err).Is(slack.ErrUserNotFound)
+	})
+
+	t.Run("other Slack errors are not ErrUserNotFound", func(t *testing.T) {
+		_, err := svc.GetUserInfo(ctx, "U_BROKEN")
+		gt.Value(t, err).NotNil().Required()
+		gt.Bool(t, errors.Is(err, slack.ErrUserNotFound)).False()
+	})
+}
+
 func TestJoinChannel(t *testing.T) {
 	var joined []string
 	mux := http.NewServeMux()
