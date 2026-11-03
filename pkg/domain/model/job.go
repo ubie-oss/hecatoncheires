@@ -283,7 +283,7 @@ type Job struct {
 	LLMModel string
 
 	// Execution is an optional job-local model and orchestration policy.
-	Execution *JobExecution
+	Execution *JobExecution `json:",omitempty"`
 
 	// Budget is the greatest amount one run of this Job may spend, in nano USD.
 	// Zero means the deployment's default budget applies.

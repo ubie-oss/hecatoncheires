@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/gollem-dev/agentkit"
@@ -396,6 +398,192 @@ func TestDurableRuntime_RecordsWhatTheRunCost(t *testing.T) {
 		got.CacheReadInputTokens, got.CacheCreationInputTokens)
 	gt.Value(t, got.CostNanoUSD).Equal(int64(want))
 	gt.Number(t, got.CostNanoUSD).Greater(0)
+}
+
+// This test uses only the pre-policy public API so it can also run against the
+// base revision. An existing Job keeps its prompts, model, tools, accounting,
+// and reflection lifecycle when it has no execution policy.
+func TestDurableRuntime_UnconfiguredExecutionPreservesLegacyContract(t *testing.T) {
+	for _, strategy := range []model.JobStrategy{model.JobStrategySimple, model.JobStrategyPlanexec} {
+		t.Run(string(strategy), func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			repo, c := setupCase(t, "ws")
+			startedAt := time.Date(2026, 8, 12, 9, 30, 0, 0, time.UTC)
+			j := &model.Job{
+				ID: "review", Name: "Case review", Description: "Review the current case evidence",
+				Prompt:   "Review case {{.Case.ID}} for {{.Event.Domain}} using {{.Job.LLMModel}}.",
+				Strategy: strategy, LLMModel: "named", Budget: pricing.FromUSD(1), Reflection: true,
+				Events: model.JobEvents{Scheduled: &model.ScheduledEventConfig{Every: time.Hour}},
+			}
+			ws := &model.WorkspaceEntry{Workspace: model.Workspace{ID: "ws"}, Jobs: []*model.Job{j}}
+			registry := model.NewWorkspaceRegistry()
+			registry.Register(ws)
+			ev := job.Event{Domain: model.JobEventDomainScheduled, WorkspaceID: "ws", CaseID: c.ID, Timestamp: startedAt}
+			wantSystem, err := job.BuildSystemPrompt(job.PromptInputs{Job: j, Workspace: ws, Case: c, Event: ev, Now: startedAt})
+			gt.NoError(t, err).Required()
+			wantUser := fmt.Sprintf("Review case %d for scheduled using named.", c.ID)
+			replies := []string{"The case review is complete."}
+			wantSpawns := int64(0)
+			if strategy == model.JobStrategyPlanexec {
+				replies = []string{
+					`{"tasks":[{"id":"review","title":"Review evidence","description":"Inspect the current case evidence","acceptance_criteria":"Return the observed case state","tools":["core_job"],"budget_usd":0.1}]}`,
+					"The evidence confirms the current case state.",
+					`{"finalize":{"reason":"The case evidence was reviewed"}}`,
+					"The case review is complete.",
+				}
+				wantSpawns = 1
+			}
+			type capturedCall struct {
+				config gollem.SessionConfig
+				inputs []gollem.Input
+			}
+			var mu sync.Mutex
+			var calls []capturedCall
+			named := &mock.LLMClientMock{NewSessionFunc: func(_ context.Context, opts ...gollem.SessionOption) (gollem.Session, error) {
+				cfg := gollem.NewSessionConfig(opts...)
+				return &mock.SessionMock{
+					GenerateFunc: func(_ context.Context, inputs []gollem.Input, opts ...gollem.GenerateOption) (*gollem.Response, error) {
+						mu.Lock()
+						defer mu.Unlock()
+						i := len(calls)
+						calls = append(calls, capturedCall{config: cfg, inputs: slices.Clone(inputs)})
+						if i >= len(replies) {
+							return nil, goerr.New("unexpected extra generation", goerr.V("call", i))
+						}
+						generate := gollem.NewGenerateConfig(opts...)
+						gt.Bool(t, generate.ToolCallsDisabled()).False()
+						gt.Value(t, generate.MaxTokens()).Nil()
+						return &gollem.Response{Texts: []string{replies[i]}, InputToken: 120, OutputToken: 34,
+							CacheReadInputToken: 40, CacheCreationInputToken: 20}, nil
+					},
+					HistoryFunc: func() (*gollem.History, error) {
+						return &gollem.History{LLType: gollem.LLMTypeOpenAI, Version: gollem.HistoryVersion}, nil
+					},
+				}, nil
+			}}
+			fallback := &mock.LLMClientMock{NewSessionFunc: func(context.Context, ...gollem.SessionOption) (gollem.Session, error) {
+				return nil, goerr.New("the configured named model must handle every generation")
+			}}
+			rate := pricing.Rate{Input: 1000, Output: 5000, CacheRead: 100, CacheWrite: 1250}
+			models, err := agentkernel.NewModelPolicy(agentkernel.ModelPolicyInput{
+				Defs: []agentkernel.ModelDef{
+					{Ref: "fallback", Provider: agentkernel.ProviderClaude, Model: "fallback-model", Rate: pricing.Rate{Input: 10000, Output: 50000}},
+					{Ref: "named", Provider: agentkernel.ProviderClaude, Model: "named-model", Rate: rate},
+				}, DefaultRef: "fallback", DefaultBudget: pricing.FromUSD(2), Clients: map[string]gollem.LLMClient{"named": named},
+			})
+			gt.NoError(t, err).Required()
+			durable := &job.DurableRuntime{History: agentarchive.NewMemoryHistoryStore(), Models: models}
+			reflector := &fakeReflector{}
+			runner := job.NewJobRunner(job.RunnerDeps{Repo: repo, Registry: registry, LLMClient: fallback, Durable: durable,
+				Reflector: reflector, Clock: func() time.Time { return startedAt }})
+			reg := agentkit.NewRegistry()
+			cfg := budget.Config{MaxSteps: 64, MaxInputTokens: 100000, MaxOutputTokens: 100000, NoticeRatio: 0.8}
+			root := budget.Root{MaxSteps: 64, NoticeRatio: 0.8}
+			task, err := agentkernel.RegisterTaskAgent(reg, cfg.Limiter(models.Resolve), durable.History)
+			gt.NoError(t, err).Required()
+			gt.NoError(t, durable.Register(reg, root.Limiter(models.Resolve), task)).Required()
+			procRepo := agentprocmemory.New()
+			durable.Locator, err = agentkernel.NewLocator(procRepo)
+			gt.NoError(t, err).Required()
+			k, err := agentkernel.Build(agentkernel.Deps{Repo: procRepo, History: durable.History, LLM: fallback,
+				Trace: agentarchive.NewMemoryTraceRepository(), Tools: agentkernel.ToolDeps{Repo: repo, Registry: registry},
+				Budgets: agentkernel.Budgets{Root: root, Task: cfg}, Models: models, Agents: reg})
+			gt.NoError(t, err).Required()
+			durable.Bind(k, nil)
+			durable.AttachRunner(runner)
+			durable.TrackSpawns()
+			gt.NoError(t, runner.Run(ctx, j, ev)).Required()
+			busy, err := durable.Locator.Busy(ctx, agentkernel.JobRunSubject("ws", c.ID, j.ID))
+			gt.NoError(t, err).Required()
+			gt.Value(t, busy).NotNil().Required()
+			gt.NoError(t, durable.Drain(ctx, agentkit.WithPollInterval(time.Millisecond))).Required()
+			async.Wait()
+
+			proc, err := k.GetProcess(ctx, busy.ProcessID)
+			gt.NoError(t, err).Required()
+			gt.Value(t, proc.Status).Equal(agentkit.ProcessSucceeded)
+			wantAgent := agentkernel.AgentJobSimple
+			if strategy == model.JobStrategyPlanexec {
+				wantAgent = agentkernel.AgentJob
+			}
+			gt.Value(t, proc.Agent).Equal(wantAgent)
+			gt.Value(t, proc.Metrics.Spawns).Equal(wantSpawns)
+			scope := agentkernel.ScopeFrom(proc.Metadata)
+			gt.String(t, scope.LLMModel).Equal("named")
+			gt.Value(t, scope.Budget).Equal(j.Budget)
+			for _, key := range []string{"job_execution", "stage_role", "stage_owner"} {
+				_, present := proc.Metadata[key]
+				gt.Bool(t, present).False()
+			}
+			events, err := k.ListEvents(ctx, proc.ID)
+			gt.NoError(t, err).Required()
+			for _, event := range events {
+				gt.Bool(t, strings.HasPrefix(string(event.Type), "hecatoncheires.usage.")).False()
+				gt.Bool(t, strings.HasPrefix(string(event.Type), "hecatoncheires.cascade.")).False()
+			}
+			gt.Array(t, fallback.NewSessionCalls()).Length(0)
+			mu.Lock()
+			observed := slices.Clone(calls)
+			mu.Unlock()
+			gt.Array(t, observed).Length(len(replies)).Required()
+			wantInputs := []gollem.Input{gollem.Text(wantUser)}
+			if strategy == model.JobStrategyPlanexec {
+				wantInputs = []gollem.Input{gollem.Text("[budget] remaining $1.00 of $1.00"), gollem.Text(wantUser)}
+			}
+			gt.Array(t, observed[0].inputs).Equal(wantInputs)
+			readTools := []string{"core__get_action", "core__list_actions"}
+			jobTools := []string{"core__add_action_step", "core__create_action", "core__get_action", "core__list_actions",
+				"core__rename_action_step", "core__set_action_assignee", "core__set_action_step_done", "core__update_action", "core__update_action_status"}
+			for i, call := range observed {
+				gt.String(t, call.config.SystemPrompt()).NotContains("Advisor handoff")
+				gt.String(t, call.config.SystemPrompt()).NotContains("Orchestrator")
+				var names []string
+				for _, tool := range call.config.Tools() {
+					names = append(names, tool.Spec().Name)
+				}
+				slices.Sort(names)
+				if strategy == model.JobStrategySimple {
+					gt.String(t, call.config.SystemPrompt()).Equal(wantSystem)
+					gt.Array(t, names).Equal(jobTools)
+				} else {
+					if i == 1 {
+						gt.Array(t, names).Equal(jobTools)
+						gt.String(t, call.config.SystemPrompt()).Contains("Review evidence")
+						gt.String(t, call.config.SystemPrompt()).Contains("2026-08-12T09:30:00Z")
+					} else {
+						gt.Array(t, names).Equal(readTools)
+						gt.String(t, call.config.SystemPrompt()).Contains(wantSystem)
+						gt.String(t, call.config.SystemPrompt()).Equal(observed[0].config.SystemPrompt())
+					}
+				}
+			}
+			logs, err := repo.JobRunLog().List(ctx, model.JobRunKey{WorkspaceID: "ws", CaseID: c.ID, JobID: j.ID}, 10)
+			gt.NoError(t, err).Required()
+			gt.Array(t, logs).Length(1).Required()
+			log := logs[0]
+			gt.Value(t, log.Stage).Equal(model.JobRunStageSuccess)
+			gt.String(t, log.Model).Equal("named-model")
+			gt.Value(t, log.LLMCallCount).Equal(int64(len(replies)))
+			gt.Value(t, log.InputTokens).Equal(120 * int64(len(replies)))
+			gt.Value(t, log.OutputTokens).Equal(34 * int64(len(replies)))
+			gt.Value(t, log.CacheReadInputTokens).Equal(40 * int64(len(replies)))
+			gt.Value(t, log.CacheCreationInputTokens).Equal(20 * int64(len(replies)))
+			gt.Value(t, log.CostNanoUSD).Equal(int64(rate.Cost(proc.Metrics.InputTokens, proc.Metrics.OutputTokens,
+				proc.Metrics.CacheReadInputTokens, proc.Metrics.CacheCreationInputTokens)))
+			gt.Value(t, log.CostNanoUSD).Equal(259000 * int64(len(replies)))
+			gt.Array(t, reflector.calls).Length(1).Required()
+			reflection := reflector.calls[0]
+			gt.String(t, reflection.WorkspaceID).Equal("ws")
+			gt.Value(t, reflection.CaseID).Equal(c.ID)
+			gt.String(t, reflection.JobID).Equal(j.ID)
+			gt.String(t, reflection.JobName).Equal(j.Name)
+			gt.String(t, reflection.JobDescription).Equal(j.Description)
+			history, err := durable.History.Load(ctx, proc.ID, proc.HistoryRef)
+			gt.NoError(t, err).Required()
+			gt.Value(t, reflection.History).Equal(history)
+		})
+	}
 }
 
 // Drain waits for the runs THIS process started, not for whatever else is in the

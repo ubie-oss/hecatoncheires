@@ -345,7 +345,12 @@ type durableUsageClient struct {
 	def    ModelDef
 }
 
-func (c *durableUsageClient) Model() string { return c.def.Model }
+func (c *durableUsageClient) Model() string {
+	if named, ok := c.LLMClient.(gollem.ModelNamer); ok {
+		return named.Model()
+	}
+	return ""
+}
 func (c *durableUsageClient) NewSession(ctx context.Context, opts ...gollem.SessionOption) (gollem.Session, error) {
 	s, err := c.LLMClient.NewSession(ctx, opts...)
 	if err != nil {

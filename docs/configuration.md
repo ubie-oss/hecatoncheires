@@ -1451,6 +1451,25 @@ There is no top-level `job_execution` configuration. Unknown execution keys,
 unknown modes, undefined model references and invalid types fail configuration
 validation rather than silently disabling the requested behavior.
 
+#### Backward compatibility
+
+Existing documented configurations do not need a migration. Without a
+`[job.execution]` table, a Job keeps its original simple or planexec strategy,
+`llm_model` or deployment-default model, budget, tool palette, event
+subscriptions, interaction and reflection settings. It does not automatically
+delegate additional work, start an advisor, or enable per-call execution-policy
+accounting. Existing unknown top-level keys remain ignored; in particular,
+`job_execution` is not interpreted as a deployment-wide policy.
+
+Unset execution policy fields are omitted from the Job's JSON representation.
+Existing prompt-template field and method access remains supported. Whole Go
+struct debug rendering can reflect newly added fields and is not a stable
+formatting contract.
+
+Separately, terminal cancellation now clears stale question/response targets,
+including for existing jobs. This fixes an invalid suspended-run record; it does
+not change model selection or enable the new execution policy.
+
 A cascade remains one logical Job run with one original budget. Main receives
 half the available run budget; advisor receives what remains of the original
 total after main and its tasks. Actual usage is charged at each model's

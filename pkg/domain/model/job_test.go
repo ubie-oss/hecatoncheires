@@ -1,6 +1,7 @@
 package model_test
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -273,4 +274,22 @@ func TestJob_Reflection_Field(t *testing.T) {
 	j2.Reflection = false
 	gt.NoError(t, j2.Validate())
 	gt.Bool(t, j2.Reflection).False()
+}
+
+func TestJobExecutionJSONPreservesLegacyShape(t *testing.T) {
+	job := &model.Job{ID: "example", LLMModel: "example-model"}
+	raw, err := json.Marshal(job)
+	gt.NoError(t, err).Required()
+	var fields map[string]json.RawMessage
+	gt.NoError(t, json.Unmarshal(raw, &fields)).Required()
+	_, present := fields["Execution"]
+	gt.Bool(t, present).False()
+	gt.Value(t, string(fields["LLMModel"])).Equal(`"example-model"`)
+	job.Execution = &model.JobExecution{Mode: model.JobExecutionModeOrchestrator, Cascade: true, ApplyTo: []model.JobExecutionTarget{model.JobExecutionTargetJob}, Models: model.JobExecutionModels{Advisor: "example-advisor"}}
+	raw, err = json.Marshal(job)
+	gt.NoError(t, err).Required()
+	gt.NoError(t, json.Unmarshal(raw, &fields)).Required()
+	var policy model.JobExecution
+	gt.NoError(t, json.Unmarshal(fields["Execution"], &policy)).Required()
+	gt.Value(t, policy).Equal(*job.Execution)
 }

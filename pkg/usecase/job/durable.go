@@ -566,7 +566,10 @@ func (d *DurableRuntime) onSimpleFinish(ctx context.Context, pid agentkit.Proces
 	default:
 		runErr = goerr.New("job run did not complete", goerr.V("status", string(proc.Status)))
 	}
-	runErr = d.executionAccountingError(sc, errors.Join(runErr, loadErr))
+	if loadErr != nil {
+		runErr = errors.Join(runErr, loadErr)
+	}
+	runErr = d.executionAccountingError(sc, runErr)
 
 	// The run record first: it is what the case agent page lists, so it must be
 	// closed even if the Slack marker or the reflection below fails.
@@ -616,7 +619,10 @@ func (d *DurableRuntime) onPlanexecFinish(ctx context.Context, pid agentkit.Proc
 	default:
 		runErr = goerr.New("job run did not complete", goerr.V("status", string(proc.Status)))
 	}
-	runErr = d.executionAccountingError(sc, errors.Join(runErr, loadErr))
+	if loadErr != nil {
+		runErr = errors.Join(runErr, loadErr)
+	}
+	runErr = d.executionAccountingError(sc, runErr)
 
 	runtrace.FinishRun(ctx, r.deps.Repo, key, sc.JobRunID, usage, runErr, r.clock())
 

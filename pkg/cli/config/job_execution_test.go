@@ -11,6 +11,7 @@ import (
 	"github.com/m-mizutani/gt"
 	"github.com/m-mizutani/hecatoncheires/pkg/cli/config"
 	"github.com/m-mizutani/hecatoncheires/pkg/domain/model"
+	"github.com/m-mizutani/hecatoncheires/pkg/utils/pricing"
 	"github.com/pelletier/go-toml/v2"
 )
 
@@ -125,7 +126,7 @@ func TestJobExecutionStrictKeysOnlyInNewSection(t *testing.T) {
 		})
 	}
 	err := config.ValidateJobExecutionTOML([]byte("[job_execution]\nmode = 'cascade'\n"))
-	gt.Bool(t, err == nil).False().Required()
+	gt.NoError(t, err)
 	err = config.ValidateJobExecutionTOML([]byte(executionJobBase + "historically_unknown = 'accepted'"))
 	gt.Bool(t, err != nil).False().Required()
 }
@@ -133,9 +134,8 @@ func TestJobExecutionStrictKeysOnlyInNewSection(t *testing.T) {
 func TestJobExecutionPublicLoadersValidateNewSection(t *testing.T) {
 	const workspace = "[workspace]\nid = 'synthetic'\nname = 'Synthetic'\n"
 	for name, src := range map[string]string{
-		"obsolete top-level": workspace + "[job_execution]\nmode = 'cascade'\n",
-		"unknown execution":  workspace + executionJobBase + "[job.execution]\nmod = 'cascade'\n",
-		"unknown role":       workspace + executionJobBase + "[job.execution.models]\nadvisr = 'expert'\n",
+		"unknown execution": workspace + executionJobBase + "[job.execution]\nmod = 'cascade'\n",
+		"unknown role":      workspace + executionJobBase + "[job.execution.models]\nadvisr = 'expert'\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := config.ParseWorkspaceConfigs([]config.WorkspaceConfigSource{{Name: "synthetic-memory.toml", Data: []byte(src)}})
@@ -204,4 +204,27 @@ func TestJobExecutionIndependentAxes(t *testing.T) {
 		gt.NoError(t, err).Required()
 		gt.Bool(t, job.Execution.AppliesTo(job.Strategy)).False()
 	}
+}
+
+func TestJobExecutionPublicLoadersIgnoreUnknownTopLevelPolicy(t *testing.T) {
+	const src = "historically_unknown = 'accepted'\n[workspace]\nid = 'example'\nname = 'Example'\n" + executionJobBase + "llm_model = 'legacy'\nbudget_usd = 0.5\n[job_execution]\nmode = 'cascade'\ncascade = 'ignored'\n[job_execution.models]\nmain = 'undefined'\n"
+	configs, err := config.ParseWorkspaceConfigs([]config.WorkspaceConfigSource{{Name: "example.toml", Data: []byte(src)}})
+	gt.NoError(t, err).Required()
+	gt.Array(t, configs).Length(1).Required()
+	gt.Array(t, configs[0].Jobs).Length(1).Required()
+	job := configs[0].Jobs[0]
+	gt.Value(t, job.Execution).Nil()
+	gt.Value(t, job.LLMModel).Equal("legacy")
+	gt.Value(t, job.Budget).Equal(pricing.FromUSD(0.5))
+	gt.Value(t, job.ModelRefs()).Equal([]string{"legacy"})
+	path := filepath.Join(t.TempDir(), "example.toml")
+	gt.NoError(t, os.WriteFile(path, []byte(src), 0600)).Required()
+	_, err = config.LoadFieldSchema(path)
+	gt.NoError(t, err)
+	loaded, err := config.LoadWorkspaceConfigs([]string{path})
+	gt.NoError(t, err).Required()
+	gt.Array(t, loaded).Length(1).Required()
+	gt.Array(t, loaded[0].Jobs).Length(1).Required()
+	gt.Value(t, loaded[0].Jobs[0].Execution).Nil()
+	gt.Value(t, loaded[0].Jobs[0].ModelRefs()).Equal([]string{"legacy"})
 }

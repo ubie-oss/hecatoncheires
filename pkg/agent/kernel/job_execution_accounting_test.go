@@ -222,22 +222,127 @@ func TestDurableJobUsagePersistenceBracketsProviderCall(t *testing.T) {
 	}
 }
 
+type namedAccountingClient struct {
+	gollem.LLMClient
+	name string
+}
+
+func (c namedAccountingClient) Model() string { return c.name }
+
 func TestDurableJobUsageLeavesLegacyCallsUnchanged(t *testing.T) {
+	for _, tc := range []struct {
+		name, model string
+		named       bool
+	}{
+		{"named client", "actual-provider-model", true},
+		{"unnamed client", "", false},
+		{"empty model name", "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := procmemory.New()
+			p, sc := durableAccountingFixture(t, repo)
+			seedUsageRoot(t, repo, sc)
+			legacy := kernel.Scope{WorkspaceID: sc.WorkspaceID, JobID: sc.JobID, JobRunID: sc.JobRunID}
+			type contextKey struct{}
+			ctx := context.WithValue(context.Background(), contextKey{}, "legacy-context")
+			input := []gollem.Input{gollem.Text("unchanged input")}
+			response := &gollem.Response{InputToken: 10, Texts: []string{"unchanged response"}}
+			providerErr := errors.New("provider generation error")
+			streamErr := errors.New("provider stream error")
+			sessionErr := errors.New("provider session error")
+			stream := make(chan *gollem.Response)
+			close(stream)
+			session := &mock.SessionMock{
+				GenerateFunc: func(gotCtx context.Context, gotInput []gollem.Input, opts ...gollem.GenerateOption) (*gollem.Response, error) {
+					gt.Bool(t, gotCtx == ctx).True()
+					gt.Value(t, gotInput).Equal(input)
+					gt.Array(t, opts).Length(3)
+					cfg := gollem.NewGenerateConfig(opts...)
+					gt.Value(t, *cfg.MaxTokens()).Equal(123)
+					gt.Bool(t, cfg.ToolCallsDisabled()).True()
+					return response, providerErr
+				},
+				StreamFunc: func(gotCtx context.Context, gotInput []gollem.Input, opts ...gollem.GenerateOption) (<-chan *gollem.Response, error) {
+					gt.Bool(t, gotCtx == ctx).True()
+					gt.Value(t, gotInput).Equal(input)
+					gt.Array(t, opts).Length(3)
+					cfg := gollem.NewGenerateConfig(opts...)
+					gt.Value(t, *cfg.MaxTokens()).Equal(123)
+					gt.Bool(t, cfg.ToolCallsDisabled()).True()
+					return stream, streamErr
+				},
+			}
+			raw := &mock.LLMClientMock{NewSessionFunc: func(gotCtx context.Context, opts ...gollem.SessionOption) (gollem.Session, error) {
+				gt.Bool(t, gotCtx == ctx).True()
+				gt.Array(t, opts).Length(3)
+				cfg := gollem.NewSessionConfig(opts...)
+				gt.Value(t, cfg.SystemPrompt()).Equal("unchanged system")
+				gt.Bool(t, cfg.PromptCache()).True()
+				return session, nil
+			}}
+			var client gollem.LLMClient = raw
+			if tc.named {
+				client = namedAccountingClient{LLMClient: raw, name: tc.model}
+			}
+			wrapped := p.WrapClient("main", client)
+			gt.Value(t, wrapped.(gollem.ModelNamer).Model()).Equal(tc.model)
+			sessionOpts := []gollem.SessionOption{gollem.WithSessionSystemPrompt("overridden"), gollem.WithSessionSystemPrompt("unchanged system"), gollem.WithSessionPromptCache(true)}
+			generateOpts := []gollem.GenerateOption{gollem.WithMaxTokens(1), gollem.WithMaxTokens(123), gollem.WithToolCallsDisabled()}
+			s, err := wrapped.NewSession(ctx, sessionOpts...)
+			gt.NoError(t, err).Required()
+			generate := kernel.DurableUsageGenerateMiddlewareForTest(p)(func(gotCtx context.Context, _ *agentkit.GenerateRequest) (*agentkit.GenerateResult, error) {
+				got, err := s.Generate(gotCtx, input, generateOpts...)
+				gt.Bool(t, got == response).True()
+				return nil, err
+			})
+			_, err = generate(ctx, &agentkit.GenerateRequest{Effect: agentkit.EffectContext{Agent: kernel.AgentJob, Metadata: legacy.Metadata()}})
+			gt.Error(t, err).Is(providerErr)
+			gotStream, err := s.Stream(ctx, input, generateOpts...)
+			gt.Error(t, err).Is(streamErr)
+			gt.Bool(t, gotStream == stream).True()
+			toolCalls := 0
+			tool := kernel.CascadeWriteMiddlewareForTest(p, nil)(func(gotCtx context.Context, _ *agentkit.ToolCallRequest) (map[string]any, error) {
+				gt.Bool(t, gotCtx == ctx).True()
+				toolCalls++
+				return nil, nil
+			})
+			_, err = tool(ctx, &agentkit.ToolCallRequest{Effect: agentkit.EffectContext{RootID: "root", Agent: kernel.AgentTask, Metadata: legacy.Metadata()}, Call: gollem.FunctionCall{Name: "business__write"}})
+			gt.NoError(t, err)
+			gt.Number(t, toolCalls).Equal(1)
+			gt.Array(t, session.GenerateCalls()).Length(1)
+			gt.Array(t, session.StreamCalls()).Length(1)
+			raw.NewSessionFunc = func(gotCtx context.Context, opts ...gollem.SessionOption) (gollem.Session, error) {
+				gt.Bool(t, gotCtx == ctx).True()
+				gt.Array(t, opts).Length(3)
+				return nil, sessionErr
+			}
+			failed, err := wrapped.NewSession(ctx, sessionOpts...)
+			gt.Error(t, err).Is(sessionErr)
+			gt.Value(t, failed).Nil()
+			gt.Array(t, raw.NewSessionCalls()).Length(2)
+			events, err := repo.ListEvents(ctx, "root", agentkit.EventQuery{})
+			gt.NoError(t, err).Required()
+			gt.Array(t, events).Length(0)
+			gt.Bool(t, kernel.UsageCacheEmptyForTest(p)).True()
+		})
+	}
+}
+
+func TestDurableJobUsageRejectsNamedModelMismatch(t *testing.T) {
 	repo := procmemory.New()
 	p, sc := durableAccountingFixture(t, repo)
 	seedUsageRoot(t, repo, sc)
+	release, err := p.LoadUsage(context.Background(), "root")
+	gt.NoError(t, err).Required()
+	defer release()
 	calls := 0
-	s, err := p.WrapClient("main", usageResponseClient(&gollem.Response{InputToken: 10}, nil, &calls)).NewSession(context.Background())
-	if err != nil {
-		gt.NoError(t, err).Required()
-	}
-	if _, err := s.Generate(context.Background(), nil); err != nil {
-		gt.NoError(t, err).Required()
-	}
-	events, _ := repo.ListEvents(context.Background(), "root", agentkit.EventQuery{})
-	if calls != 1 || len(events) != 0 {
-		gt.Bool(t, false).Describe("legacy call entered durable job accounting").True().Required()
-	}
+	raw := namedAccountingClient{LLMClient: usageResponseClient(&gollem.Response{InputToken: 10}, nil, &calls), name: "different-model"}
+	err = generateUsage(t, p, sc, "main", "root", nil, raw)
+	gt.Error(t, err)
+	gt.Number(t, calls).Equal(0)
+	events, err := repo.ListEvents(context.Background(), "root", agentkit.EventQuery{})
+	gt.NoError(t, err).Required()
+	gt.Array(t, events).Length(0)
 }
 
 func TestScopedJobUsageDropsOnlyTheCacheAndRequiresRestore(t *testing.T) {
@@ -335,6 +440,7 @@ func TestDurableUsageWrapperIdempotencyAndPartialFailure(t *testing.T) {
 	gt.Bool(t, record.Complete).True()
 	gt.Bool(t, record.UsageKnown).True()
 	gt.Bool(t, record.Failed).True()
+	gt.Value(t, record.Model).Equal("main-model")
 	gt.Value(t, record.Kind).Equal("internal")
 	gt.Value(t, record.ParentOrChild).Equal("child")
 	gt.Value(t, record.Phase).Equal("tool")

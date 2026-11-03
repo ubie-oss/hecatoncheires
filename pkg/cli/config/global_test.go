@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/m-mizutani/gt"
@@ -16,23 +15,33 @@ import (
 	"github.com/urfave/cli/v3"
 )
 
-func TestGlobalLoadersRejectObsoleteJobExecution(t *testing.T) {
+func TestGlobalLoadersIgnoreUnknownJobExecution(t *testing.T) {
 	loaders := map[string]func([]string) error{
-		"workspace groups": func(paths []string) error { _, err := config.LoadWorkspaceGroups(paths); return err },
-		"export":           func(paths []string) error { _, err := config.LoadExportConfig(paths); return err },
-		"models":           func(paths []string) error { _, err := config.LoadLLMModels(paths); return err },
-		"agent":            func(paths []string) error { _, err := config.LoadAgentSection(paths); return err },
+		"workspace groups": func(paths []string) error {
+			got, err := config.LoadWorkspaceGroups(paths)
+			gt.Array(t, got).Length(0)
+			return err
+		},
+		"export": func(paths []string) error {
+			got, err := config.LoadExportConfig(paths)
+			gt.Value(t, got).Nil()
+			return err
+		},
+		"models": func(paths []string) error {
+			got, err := config.LoadLLMModels(paths)
+			gt.Array(t, got).Length(0)
+			return err
+		},
+		"agent": func(paths []string) error {
+			got, err := config.LoadAgentSection(paths)
+			gt.Value(t, got).Nil()
+			return err
+		},
 	}
 	for name, load := range loaders {
 		t.Run(name, func(t *testing.T) {
-			path := writeGlobalConfig(t, "obsolete.toml", "[job_execution]\nmode = 'cascade'\n")
-			if err := load([]string{path}); err == nil || !strings.Contains(err.Error(), "invalid job execution config") {
-				t.Fatalf("global loader silently accepted obsolete job_execution: %v", err)
-			}
-			path = writeGlobalConfig(t, "legacy.toml", "historically_unknown = 'accepted'\n[agent]\nbudget_usd = 1\n")
-			if err := load([]string{path}); err != nil {
-				t.Fatalf("global loader changed legacy unknown-key handling: %v", err)
-			}
+			path := writeGlobalConfig(t, "ignored.toml", "historically_unknown = 'accepted'\n[job_execution]\nmode = 'cascade'\ncascade = 'ignored legacy value'\n[job_execution.models]\nmain = 'not-a-defined-model'\n")
+			gt.NoError(t, load([]string{path}))
 		})
 	}
 }

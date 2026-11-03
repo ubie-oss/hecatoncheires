@@ -68,9 +68,6 @@ func ValidateJobExecutionTOML(data []byte) error {
 	if err := toml.Unmarshal(data, &raw); err != nil {
 		return err
 	}
-	if _, exists := raw["job_execution"]; exists {
-		return goerr.New("top-level job_execution is not supported; configure execution under each [[job]]")
-	}
 	jobs, _ := raw["job"].([]any)
 	for i, value := range jobs {
 		job, ok := value.(map[string]any)
