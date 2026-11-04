@@ -147,6 +147,10 @@ type SlackSection struct {
 	// every channel-root post) or "mention" (only an @mention of the bot).
 	// Ignored in channel mode.
 	Trigger string `toml:"trigger"`
+	// CaseSummary selects how the "created a case" summary posted to Slack is
+	// rendered in thread mode: "full" (default) or "link" (a single line
+	// linking to the case). Ignored in channel mode.
+	CaseSummary string `toml:"case_summary"`
 	// Reaction is the emoji name (with or without surrounding colons) that
 	// triggers case creation when added to any visible message. Thread mode
 	// only; empty disables the reaction trigger.
@@ -317,6 +321,7 @@ type WorkspaceConfig struct {
 	Jobs                []*model.Job
 	CaseMode            model.CaseMode
 	CaseTrigger         model.CaseTrigger
+	CaseSummary         model.CaseSummaryStyle
 	SlackMonitorChannel string
 	AcceptBot           bool
 	CaseStatusSet       *model.ActionStatusSet
@@ -630,6 +635,13 @@ func (a *AppConfig) validateCaseMode() error {
 	if a.Slack.Trigger != "" && !model.CaseTrigger(a.Slack.Trigger).IsValid() {
 		return goerr.Wrap(ErrInvalidCaseTrigger, "[slack] trigger must be \"instant\" or \"mention\"",
 			goerr.V("trigger", a.Slack.Trigger))
+	}
+
+	// Same for the summary style: validated in any mode, used only in thread
+	// mode.
+	if a.Slack.CaseSummary != "" && !model.CaseSummaryStyle(a.Slack.CaseSummary).IsValid() {
+		return goerr.Wrap(ErrInvalidCaseSummary, "[slack] case_summary must be \"full\" or \"link\"",
+			goerr.V("case_summary", a.Slack.CaseSummary))
 	}
 
 	// Reaction trigger is thread-mode only, and must be a valid emoji name. A
@@ -963,6 +975,7 @@ func parseWorkspaceConfig(src WorkspaceConfigSource) (*WorkspaceConfig, error) {
 
 	caseMode := model.CaseMode(appCfg.Slack.Mode).Normalize()
 	caseTrigger := model.CaseTrigger(appCfg.Slack.Trigger).Normalize()
+	caseSummary := model.CaseSummaryStyle(appCfg.Slack.CaseSummary).Normalize()
 	caseStatusSet, err := appCfg.resolveCaseStatusSet()
 	if err != nil {
 		return nil, goerr.Wrap(err, "failed to resolve case status set", goerr.V(ConfigPathKey, path))
@@ -1016,6 +1029,10 @@ func parseWorkspaceConfig(src WorkspaceConfigSource) (*WorkspaceConfig, error) {
 			logging.Default().Warn("channel-mode workspace ignores [slack] trigger",
 				"workspace_id", wsID, "config_path", path)
 		}
+		if appCfg.Slack.CaseSummary != "" {
+			logging.Default().Warn("channel-mode workspace ignores [slack] case_summary",
+				"workspace_id", wsID, "config_path", path)
+		}
 	}
 
 	return &WorkspaceConfig{
@@ -1041,6 +1058,7 @@ func parseWorkspaceConfig(src WorkspaceConfigSource) (*WorkspaceConfig, error) {
 		Jobs:                 jobs,
 		CaseMode:             caseMode,
 		CaseTrigger:          caseTrigger,
+		CaseSummary:          caseSummary,
 		SlackMonitorChannel:  appCfg.Slack.Channel,
 		AcceptBot:            appCfg.Slack.AcceptBot,
 		CaseStatusSet:        caseStatusSet,
@@ -1129,6 +1147,7 @@ func BuildWorkspaceRegistry(workspaceConfigs []*WorkspaceConfig) *model.Workspac
 			Jobs:                    wc.Jobs,
 			CaseMode:                wc.CaseMode,
 			CaseTrigger:             wc.CaseTrigger,
+			CaseSummary:             wc.CaseSummary,
 			SlackMonitorChannelID:   wc.SlackMonitorChannel,
 			AcceptBot:               wc.AcceptBot,
 			CaseStatusSet:           wc.CaseStatusSet,

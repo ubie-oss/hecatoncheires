@@ -133,6 +133,9 @@ const (
 	MsgThreadCaseSummaryDesc    // "Description" (field label)
 	MsgThreadCaseSummaryStatus  // "Status" (field label)
 	MsgThreadCaseSummaryLink    // "<%s|Open in web UI>" (url)
+	// One-line summary for [slack] case_summary = "link".
+	MsgThreadCaseSummaryLine       // "%s: <%s|%s>" (header, url, title)
+	MsgThreadCaseSummaryLineNoLink // "%s: %s" (header, title) — variant when no base URL is configured
 
 	// Reaction-triggered (cross-channel) case creation.
 	MsgReactionCasePlaceholder  // "🔍 Creating a case…" — placeholder root posted before creation; replaced in place by the case summary
