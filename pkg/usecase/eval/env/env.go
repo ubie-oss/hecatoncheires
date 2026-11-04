@@ -429,6 +429,7 @@ func buildRegistry(wc *config.WorkspaceConfig) (*model.WorkspaceRegistry, *model
 		AssistLanguage:        wc.AssistLanguage,
 		Language:              wc.Language,
 		CaseCreatePrompt:      wc.CaseCreatePrompt,
+		CaseMentionPrompt:     wc.CaseMentionPrompt,
 		Jobs:                  wc.Jobs,
 		CaseMode:              wc.CaseMode,
 		SlackMonitorChannelID: wc.SlackMonitorChannel,

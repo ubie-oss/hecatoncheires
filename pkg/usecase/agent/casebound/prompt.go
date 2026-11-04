@@ -4,6 +4,7 @@ import (
 	"bytes"
 	_ "embed"
 	"fmt"
+	"strings"
 	"text/template"
 	"time"
 
@@ -114,6 +115,14 @@ type promptData struct {
 	// Empty when the workspace configures none, in which case the agent
 	// answers in the language of the user's message.
 	Language string
+	// WorkspaceDescription is [workspace] description: the workspace's own
+	// account of what a case is and how work in it is organized. Empty when
+	// unset.
+	WorkspaceDescription string
+	// MentionPrompt is [case.prompts].mention, rendered last as the
+	// workspace-specific instructions so the operator's text has the final
+	// word. Empty when unset.
+	MentionPrompt string
 }
 
 // buildSystemPrompt renders the casebound system prompt.
@@ -133,6 +142,8 @@ func buildSystemPrompt(c *model.Case, entry *model.WorkspaceEntry, channelID, th
 	}
 	if entry != nil {
 		data.Language = i18n.LanguageLabelOf(entry.Language)
+		data.WorkspaceDescription = strings.TrimSpace(entry.Workspace.Description)
+		data.MentionPrompt = strings.TrimSpace(entry.CaseMentionPrompt)
 	}
 
 	if entry != nil && entry.FieldSchema != nil && len(c.FieldValues) > 0 {

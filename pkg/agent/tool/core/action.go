@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/gollem-dev/gollem"
@@ -148,6 +149,29 @@ func (t *getActionTool) Run(ctx context.Context, args map[string]any) (map[strin
 	return actionToMap(a), nil
 }
 
+// statusParamDescription appends the workspace's action statuses — id, name,
+// whether it closes the action, and the operator-written description — to a
+// status parameter's description. The parameter's enum carries the ids alone,
+// and a status set that encodes meaning in its ids (several kinds of action
+// told apart by id prefix, say) cannot be used correctly from those.
+func statusParamDescription(lead string, set *model.ActionStatusSet) string {
+	var b strings.Builder
+	b.WriteString(lead)
+	b.WriteString(" Available statuses:")
+	for _, d := range set.Statuses() {
+		fmt.Fprintf(&b, "\n- `%s` (%s", d.ID, d.Name)
+		if set.IsClosed(d.ID) {
+			b.WriteString(", closed")
+		}
+		b.WriteString(")")
+		if desc := strings.TrimSpace(d.Description); desc != "" {
+			b.WriteString(": ")
+			b.WriteString(desc)
+		}
+	}
+	return b.String()
+}
+
 // createActionTool creates a new action through the unified ActionUseCase
 // entry point. Routing through the usecase (instead of poking the repository
 // directly) is what triggers the Slack channel post, ActionEvent recording,
@@ -181,7 +205,7 @@ func (t *createActionTool) Spec() gollem.ToolSpec {
 			},
 			"status": {
 				Type:        gollem.TypeString,
-				Description: fmt.Sprintf("Initial status of the action (default: %s)", t.statusSet.InitialID()),
+				Description: statusParamDescription(fmt.Sprintf("Initial status of the action (default: %s).", t.statusSet.InitialID()), t.statusSet),
 				Required:    false,
 				Enum:        t.statusSet.IDs(),
 			},
@@ -371,7 +395,7 @@ func (t *updateActionStatusTool) Spec() gollem.ToolSpec {
 			},
 			"status": {
 				Type:        gollem.TypeString,
-				Description: "New status for the action",
+				Description: statusParamDescription("New status for the action.", t.statusSet),
 				Required:    true,
 				Enum:        t.statusSet.IDs(),
 			},

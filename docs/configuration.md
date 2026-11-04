@@ -63,6 +63,7 @@ language = "ja"  # optional; "en" or "ja"
 |----------|------|----------|-------------|
 | `id` | string | **Yes** | Unique workspace identifier. Must match `^[a-z0-9]+(-[a-z0-9]+)*$` and be at most 63 characters |
 | `name` | string | No | Display name for the workspace. Defaults to `id` if omitted |
+| `description` | string | No | What a case in this workspace is and how work in it is organized. Given to the agents as the workspace's own conventions: the case-draft planner, Jobs, the MCP endpoint, and the agent that answers an @mention on an existing case (the case-channel agent in channel mode, the case-thread agent in thread mode). Write the conventions those agents must follow here (e.g. an action title format); put reply-style rules in [`[case.prompts] mention`](#case-agent-prompts-caseprompts) instead |
 | `emoji` | string | No | Badge glyph shown in the workspace selector and switcher. Mutually exclusive with `color`. Up to 16 runes |
 | `color` | string | No | Badge background color as a `#RRGGBB` hex code (6-digit only). Mutually exclusive with `emoji` |
 | `language` | string | No | Output language of this workspace's Slack messages and agent replies: `en` or `ja`. Takes priority over each Slack user's locale. Unset keeps the per-user locale. See [Workspace Language](#workspace-language) |
@@ -1127,7 +1128,7 @@ emoji = "✅"
 |-----|------|----------|-------------|
 | `id` | string | **Yes** | Stable identifier. Must match `^[A-Za-z0-9]+([_-][A-Za-z0-9]+)*$` and be unique within the workspace. Stored in the database as the action's status. |
 | `name` | string | **Yes** | Display label. Write it in whichever language fits the workspace — there is no localization layer. |
-| `description` | string | No | Free-form description (currently unused in the UI; reserved for tooltips). |
+| `description` | string | No | Free-form description. Not shown in the UI; given to the agent, together with `name` and whether the status is closed, in the `status` parameter of `core__create_action` / `core__update_action_status`. Use it to say what the status means when its id alone does not (for example, several kinds of action told apart by id prefix). |
 | `color` | string | No | UI color. See "Color values" below. Defaults to the neutral `idle` preset. |
 | `emoji` | string | No | Single emoji used in Slack messages and web UI badges. |
 
@@ -1280,8 +1281,25 @@ a "couldn't conclude" notice. On success the bot posts a Block Kit
 summary of the created Case.
 
 The optional `[case.prompts]` sub-table injects workspace-specific guidance into
-this agent. Today only the `create` key (the initialization agent) is consumed;
-`mention` / `close` are reserved for future phases.
+the case agents, one key per phase:
+
+- `create` — the thread-mode case-initialization agent described above.
+- `mention` — the agent that answers an @mention on an **existing** case, in
+  **both** modes: the case-channel agent in channel mode, and the case-thread
+  agent in thread mode. Use it for how replies should look (length, format) and
+  for working rules the agent must follow when it acts on the case. It sits
+  last in the system prompt, after the general instructions, and is told that
+  it takes precedence over them.
+
+`close` is reserved for a future phase. Each phase also takes a file form
+(`create_file` / `mention_file`), read relative to the config file's
+directory, following the `prompt` / `prompt_file` pattern of
+[`[slack.workspace_agent]`](#workspace-agent).
+
+`[case.prompts]` is the only part of `[case]` a channel-mode workspace uses: a
+channel-mode file may contain `[case.prompts]` with no `[case.status]` at all.
+A channel-mode workspace that sets `create` gets a warning at startup, since
+there is no initialization agent there to read it.
 
 ```toml
 [case.prompts]
@@ -1289,11 +1307,22 @@ create = """
 For security incidents, always set the severity field and capture the affected
 service in the description before creating the case.
 """
+mention = """
+Answer in at most five bullet points unless asked for detail.
+"""
+# or, instead of the inline key:
+# mention_file = "prompts/mention.md"
 ```
 
 | Key | Type | Required | Description |
 |-----|------|----------|-------------|
-| `create` | string | No | Appended to the case-initialization agent's system prompt as "Workspace-specific instructions". Capped at 16384 bytes; startup fails if exceeded. |
+| `create` | string | No | Appended to the case-initialization agent's system prompt (thread mode) as "Workspace-specific instructions". Capped at 16384 bytes; startup fails if exceeded. |
+| `create_file` | string | No | Path to a file whose contents are used as `create`. Relative paths resolve against the config file's directory; trailing whitespace is trimmed. Mutually exclusive with `create`; an empty file is a startup error. |
+| `mention` | string | No | Appended to the system prompt of the agent that answers an @mention on an existing case (both modes) as "Workspace-specific instructions". Capped at 16384 bytes; startup fails if exceeded. |
+| `mention_file` | string | No | Path to a file whose contents are used as `mention`. Same rules as `create_file`. Mutually exclusive with `mention`. |
+
+The same agent also receives the workspace's [`[workspace] description`](#properties)
+as the workspace's own conventions.
 
 ---
 

@@ -378,3 +378,44 @@ func TestBuildUserInput_SkipsTheMentionInTheTranscript(t *testing.T) {
 	gt.String(t, got).Contains("earlier note")
 	gt.Number(t, strings.Count(got, "<@bot> assign me")).Equal(1)
 }
+
+// A mention turn on an existing case carries [workspace] description and
+// [case.prompts].mention; each phase gets only its own operator prompt, so a
+// create turn never sees the mention prompt and vice versa, and a materialize
+// turn sees neither.
+func TestBuildSystemPrompt_MentionMode_WorkspaceInstructions(t *testing.T) {
+	ws := newThreadWorkspace()
+	ws.Workspace.Description = "  Every case tracks one vendor review.\n"
+	ws.CaseCreatePrompt = "Operator create prompt"
+	ws.CaseMentionPrompt = "Operator mention prompt"
+	c := newThreadCase()
+
+	mention := threadcase.BuildSystemPromptForTest(c, ws, threadcase.ModeMention, "")
+	gt.String(t, mention).Contains("this is a thread-mode case. Sub-agents may read")
+	gt.String(t, mention).Contains("\n\n# Workspace\n" +
+		"This case belongs to a workspace that describes itself as follows. Follow the conventions it sets.\n\n" +
+		"Every case tracks one vendor review.\n\n" +
+		"# Current case\n")
+	gt.Bool(t, strings.HasSuffix(mention, slackfmt.Section()+"\n\n# Workspace-specific instructions\nOperator mention prompt\n")).True()
+	gt.Bool(t, strings.Contains(mention, "Operator create prompt")).False()
+
+	created := threadcase.BuildSystemPromptForTest(nil, ws, threadcase.ModeCreate, "")
+	gt.String(t, created).Contains("# Workspace-specific instructions\nOperator create prompt\n")
+	gt.Bool(t, strings.Contains(created, "Operator mention prompt")).False()
+	gt.Bool(t, strings.Contains(created, "# Workspace\n")).False()
+
+	materialized := threadcase.BuildSystemPromptForTest(c, ws, threadcase.ModeMaterialize, "")
+	gt.Bool(t, strings.Contains(materialized, "# Workspace-specific instructions")).False()
+	gt.Bool(t, strings.Contains(materialized, "# Workspace\n")).False()
+}
+
+// Blank values render no heading at all.
+func TestBuildSystemPrompt_MentionMode_BlankWorkspaceInstructions(t *testing.T) {
+	ws := newThreadWorkspace()
+	ws.Workspace.Description = " \n"
+	ws.CaseMentionPrompt = "\t\n"
+
+	prompt := threadcase.BuildSystemPromptForTest(newThreadCase(), ws, threadcase.ModeMention, "")
+	gt.Bool(t, strings.Contains(prompt, "# Workspace\n")).False()
+	gt.Bool(t, strings.Contains(prompt, "# Workspace-specific instructions")).False()
+}

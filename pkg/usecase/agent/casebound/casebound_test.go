@@ -800,3 +800,98 @@ func TestBuildSystemPrompt_EditableFieldsAndStatuses(t *testing.T) {
 	gt.String(t, prompt).Contains("Work has not started")
 	gt.String(t, prompt).Contains("Work is fully resolved")
 }
+
+// [workspace] description and [case.prompts].mention reach the case-channel
+// agent: the description right after the opening as the workspace's own
+// conventions, the mention prompt as the very last section so the operator's
+// text has the final word (after the shared Slack formatting rules, too).
+func TestBuildSystemPrompt_WorkspaceDescriptionAndMentionPrompt(t *testing.T) {
+	c := &model.Case{Title: "Test Case", Status: types.CaseStatusOpen}
+	now := time.Date(2026, 5, 4, 12, 30, 0, 0, time.UTC)
+	entry := &model.WorkspaceEntry{
+		Workspace: model.Workspace{
+			ID:          "ws-test",
+			Description: "  Review actions are titled `[review] <item> (review #<parent action>)`.\n",
+		},
+		CaseMentionPrompt: "\nAnswer in at most five bullet points.\n",
+	}
+
+	prompt := casebound.BuildSystemPromptForTest(c, entry, "C0TEST", "1700000000.000100", now, nil, nil, nil)
+
+	gt.String(t, prompt).Contains("You are responding in a Slack channel dedicated to the following case.\n\n" +
+		"## Workspace\n" +
+		"This case belongs to a workspace that describes itself as follows. Follow the conventions it sets.\n\n" +
+		"Review actions are titled `[review] <item> (review #<parent action>)`.\n\n" +
+		"## Slack Context\n")
+	gt.Bool(t, strings.HasSuffix(prompt, slackfmt.Section()+"\n\n"+
+		"## Workspace-specific instructions\n"+
+		"These instructions come from the workspace configuration. Follow them; where they conflict with the general instructions above (for example on reply length or format), they take precedence.\n\n"+
+		"Answer in at most five bullet points.\n")).True()
+}
+
+// Without either value, neither heading is rendered and the prompt still ends
+// on the shared Slack formatting section, exactly as before the feature.
+func TestBuildSystemPrompt_NoWorkspaceDescriptionOrMentionPrompt(t *testing.T) {
+	c := &model.Case{Title: "Test Case", Status: types.CaseStatusOpen}
+	now := time.Date(2026, 5, 4, 12, 30, 0, 0, time.UTC)
+	for name, entry := range map[string]*model.WorkspaceEntry{
+		"nil entry":   nil,
+		"unset":       {Workspace: model.Workspace{ID: "ws-test"}},
+		"blank texts": {Workspace: model.Workspace{ID: "ws-test", Description: "  \n"}, CaseMentionPrompt: "\t\n"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			prompt := casebound.BuildSystemPromptForTest(c, entry, "C0TEST", "1700000000.000100", now, nil, nil, nil)
+			gt.Bool(t, strings.Contains(prompt, "## Workspace\n")).False()
+			gt.Bool(t, strings.Contains(prompt, "## Workspace-specific instructions")).False()
+			gt.String(t, prompt).Contains("You are responding in a Slack channel dedicated to the following case.\n\n## Slack Context\n")
+			gt.Bool(t, strings.HasSuffix(prompt, slackfmt.Section()+"\n")).True()
+		})
+	}
+}
+
+// The workspace's text has to reach the model on a real turn, not only the
+// template: StartTurn builds the prompt from the request's WorkspaceEntry and
+// the run hands it to the model as the session's system prompt.
+func TestStartTurnGivesTheModelTheWorkspaceInstructions(t *testing.T) {
+	ctx := context.Background()
+	var (
+		mu      sync.Mutex
+		prompts []string
+	)
+	llm := &mock.LLMClientMock{
+		NewSessionFunc: func(_ context.Context, opts ...gollem.SessionOption) (gollem.Session, error) {
+			cfg := gollem.NewSessionConfig(opts...)
+			mu.Lock()
+			prompts = append(prompts, cfg.SystemPrompt())
+			mu.Unlock()
+			return &mock.SessionMock{
+				GenerateFunc: func(_ context.Context, _ []gollem.Input, _ ...gollem.GenerateOption) (*gollem.Response, error) {
+					return &gollem.Response{Texts: []string{"- short answer"}}, nil
+				},
+				HistoryFunc: func() (*gollem.History, error) {
+					return &gollem.History{LLType: gollem.LLMTypeOpenAI, Version: gollem.HistoryVersion}, nil
+				},
+			}, nil
+		},
+	}
+	h := newHarness(t, llm)
+	ssn := h.session(t, ctx)
+
+	req := h.request(ssn, "1700000001.000001")
+	req.Workspace = &model.WorkspaceEntry{
+		Workspace:         model.Workspace{ID: "ws-1", Name: "WS", Description: "Every case tracks one vendor review."},
+		CaseMentionPrompt: "Answer in at most five bullet points.",
+	}
+	res, err := h.uc.StartTurn(ctx, req)
+	gt.NoError(t, err).Required()
+	proc := h.drive(t, res.ProcessID)
+	gt.Value(t, proc.Status).Equal(agentkit.ProcessSucceeded)
+
+	mu.Lock()
+	defer mu.Unlock()
+	gt.Array(t, prompts).Length(1).Required()
+	gt.String(t, prompts[0]).Contains("## Workspace\n")
+	gt.String(t, prompts[0]).Contains("Every case tracks one vendor review.")
+	gt.String(t, prompts[0]).Contains("## Workspace-specific instructions\n")
+	gt.String(t, prompts[0]).Contains("Answer in at most five bullet points.")
+}
