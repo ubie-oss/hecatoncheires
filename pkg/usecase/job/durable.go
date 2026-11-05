@@ -58,9 +58,11 @@ type DurableRuntime struct {
 	// spawns no durable run at all.
 	Models agentkernel.ModelPolicy
 
-	simple   agentkit.Agent[react.Input]
-	planexec agentkit.Agent[planexec.Input]
-	runner   *JobRunner
+	simple      agentkit.Agent[react.Input]
+	planexec    agentkit.Agent[planexec.Input]
+	cascade     agentkit.Agent[cascadeInput]
+	cascadeMain agentkit.Agent[cascadeMainInput]
+	runner      *JobRunner
 	// probe answers which toolset ids resolve to a tool for a run's scope, so the
 	// planner is offered only what its sub-agents will actually receive. Filled by
 	// Bind; nil leaves the palette unfiltered.
@@ -164,7 +166,9 @@ func (d *DurableRuntime) Drain(ctx context.Context, serveOpts ...agentkit.ServeO
 		select {
 		case <-ctx.Done():
 			stop()
-			<-served
+			if err := <-served; err != nil && !errors.Is(err, context.Canceled) {
+				errutil.Handle(ctx, err, "agent worker failed while the sweep was interrupted")
+			}
 			return goerr.Wrap(ctx.Err(), "the sweep was interrupted while runs were still going",
 				goerr.V("unfinished", len(pending)))
 		case <-time.After(drainPollInterval):
@@ -259,7 +263,7 @@ func (d *DurableRuntime) Register(reg *agentkit.Registry, limiter agentkit.Limit
 		return goerr.Wrap(err, "register the planexec-strategy job agent")
 	}
 	d.planexec = handle
-	return nil
+	return d.registerCascade(reg, limiter)
 }
 
 // Bind hands over the Kernel the registered agents run on. Until it is called
@@ -346,9 +350,33 @@ type spawnParams struct {
 // released when Run returns, so the subject — not the lease — is the durable
 // guard from here on.
 func (d *DurableRuntime) spawn(ctx context.Context, strategy model.JobStrategy, p spawnParams) (agentkit.ProcessID, error) {
+	baseSystemPrompt := p.systemPrompt
+	execution := resolvedExecution(p.job, strategy)
+	if execution != nil && d.Models.IsZero() {
+		return "", goerr.New("job execution policy requires configured models")
+	}
+	if execution != nil {
+		if execution.Models.Main == "" {
+			execution.Models.Main = d.Models.DefaultRef()
+		}
+		if execution.Models.Sub == "" {
+			execution.Models.Sub = execution.Models.Main
+		}
+	}
+	if execution != nil && execution.Mode == model.JobExecutionModeOrchestrator {
+		strategy = model.JobStrategyPlanexec
+		prompt, err := renderExecutionPrompt(orchestratorPrompt, executionPromptInput{SystemPrompt: p.systemPrompt, AllowHandoff: false})
+		if err != nil {
+			return "", err
+		}
+		p.systemPrompt = prompt
+	}
 	name := agentkernel.AgentJobSimple
 	if strategy == model.JobStrategyPlanexec {
 		name = agentkernel.AgentJob
+	}
+	if execution != nil && execution.Cascade {
+		name = agentkernel.AgentJobCascade
 	}
 	scope := agentkernel.Scope{
 		WorkspaceID: p.key.WorkspaceID,
@@ -371,7 +399,11 @@ func (d *DurableRuntime) spawn(ctx context.Context, strategy model.JobStrategy, 
 		Budget:   p.job.Budget,
 		// Empty unless the workspace configures a language (Run sets it): an
 		// unconfigured Job keeps the deployment default, as it always has.
-		Lang: string(i18n.LangFromContext(ctx)),
+		Lang:         string(i18n.LangFromContext(ctx)),
+		JobExecution: execution,
+	}
+	if execution != nil {
+		scope.StageRole = agentkernel.StageRoleMain
 	}
 	// Both or neither: the scope rejects a half-set pair, and a marker that could
 	// not be posted leaves the run with no thread to report into rather than
@@ -398,6 +430,7 @@ func (d *DurableRuntime) spawn(ctx context.Context, strategy model.JobStrategy, 
 
 	var pid agentkit.ProcessID
 	var err error
+	var plannerInput planexec.Input
 	if strategy == model.JobStrategyPlanexec {
 		taskContext, tcErr := p.taskContext.Render()
 		if tcErr != nil {
@@ -420,7 +453,7 @@ func (d *DurableRuntime) spawn(ctx context.Context, strategy model.JobStrategy, 
 		if scope.Lang != "" {
 			languageLabel = i18n.LanguageLabel(ctx)
 		}
-		pid, err = d.planexec.Spawn(ctx, d.Kernel, planexec.Input{
+		plannerInput = planexec.Input{
 			SystemPrompt:  p.systemPrompt,
 			UserInput:     p.userPrompt,
 			KnownToolIDs:  knownToolIDs,
@@ -436,14 +469,34 @@ func (d *DurableRuntime) spawn(ctx context.Context, strategy model.JobStrategy, 
 			AllowSubAgentWrites: true,
 			// A trivially-answerable Job skips the investigation machinery and
 			// replies in a single tool-enabled pass.
-			AllowDirect: true,
+			AllowDirect: execution == nil || execution.Mode != model.JobExecutionModeOrchestrator,
 			// Only an interactive Job may stop and ask; an unattended one has nobody
 			// to answer. It waits in-band rather than ending the turn, because a Job
 			// run is ONE record spanning the whole exchange — the same run id resumes
 			// once the user answers.
 			AllowQuestion:     p.interactive,
 			SuspendOnQuestion: p.interactive,
+		}
+	}
+	if execution != nil && execution.Cascade {
+		readOnlyNames, readErr := d.probe.ReadOnlyNames(ctx, scope, agent.KnownToolSetIDsJob)
+		if readErr != nil {
+			return "", goerr.Wrap(readErr, "resolve cascade read tools")
+		}
+		mainPlannerInput := plannerInput
+		if execution.Mode == model.JobExecutionModeOrchestrator {
+			prompt, renderErr := renderExecutionPrompt(orchestratorPrompt, executionPromptInput{SystemPrompt: baseSystemPrompt, AllowHandoff: true})
+			if renderErr != nil {
+				return "", renderErr
+			}
+			mainPlannerInput.SystemPrompt = prompt
+		}
+		pid, err = d.cascade.Spawn(ctx, d.Kernel, cascadeInput{
+			Main:     cascadeMainInput{Input: react.Input{SystemPrompt: p.systemPrompt, Prompt: p.userPrompt}, ReadOnlyNames: readOnlyNames},
+			Strategy: strategy, Planexec: plannerInput, MainPlanexec: mainPlannerInput, Orchestrator: execution.Mode == model.JobExecutionModeOrchestrator,
 		}, opts...)
+	} else if strategy == model.JobStrategyPlanexec {
+		pid, err = d.planexec.Spawn(ctx, d.Kernel, plannerInput, opts...)
 	} else {
 		pid, err = d.simple.Spawn(ctx, d.Kernel,
 			react.Input{SystemPrompt: p.systemPrompt, Prompt: p.userPrompt}, opts...)
@@ -497,7 +550,12 @@ func (d *DurableRuntime) onSimpleFinish(ctx context.Context, pid agentkit.Proces
 	if err != nil {
 		return goerr.Wrap(err, "read the finished job run", goerr.V("process", pid))
 	}
+	if cascadeChildProcess(proc) {
+		return nil
+	}
 	sc := agentkernel.ScopeFrom(proc.Metadata)
+	releaseUsage, loadErr := d.loadExecutionUsage(ctx, proc)
+	defer releaseUsage()
 	key := model.JobRunKey{WorkspaceID: sc.WorkspaceID, CaseID: sc.CaseID, JobID: sc.JobID}
 
 	var runErr error
@@ -508,6 +566,10 @@ func (d *DurableRuntime) onSimpleFinish(ctx context.Context, pid agentkit.Proces
 	default:
 		runErr = goerr.New("job run did not complete", goerr.V("status", string(proc.Status)))
 	}
+	if loadErr != nil {
+		runErr = errors.Join(runErr, loadErr)
+	}
+	runErr = d.executionAccountingError(sc, runErr)
 
 	// The run record first: it is what the case agent page lists, so it must be
 	// closed even if the Slack marker or the reflection below fails.
@@ -537,14 +599,19 @@ func (d *DurableRuntime) onPlanexecFinish(ctx context.Context, pid agentkit.Proc
 	if err != nil {
 		return goerr.Wrap(err, "read the finished job run", goerr.V("process", pid))
 	}
+	if cascadeChildProcess(proc) {
+		return nil
+	}
 	sc := agentkernel.ScopeFrom(proc.Metadata)
+	releaseUsage, loadErr := d.loadExecutionUsage(ctx, proc)
+	defer releaseUsage()
 	key := model.JobRunKey{WorkspaceID: sc.WorkspaceID, CaseID: sc.CaseID, JobID: sc.JobID}
 	usage := d.processUsage(sc, proc)
 
 	var runErr error
 	switch res.Status {
 	case agentkit.ProcessSucceeded:
-		if res.Output != nil && res.Output.Kind == planexec.OutputFallback {
+		if res.Output != nil && (res.Output.Kind == planexec.OutputFallback || res.Output.Kind == planexec.OutputHandoff) {
 			runErr = goerr.New(fallbackReason(res.Output.FallbackReason))
 		}
 	case agentkit.ProcessFailed:
@@ -552,6 +619,10 @@ func (d *DurableRuntime) onPlanexecFinish(ctx context.Context, pid agentkit.Proc
 	default:
 		runErr = goerr.New("job run did not complete", goerr.V("status", string(proc.Status)))
 	}
+	if loadErr != nil {
+		runErr = errors.Join(runErr, loadErr)
+	}
+	runErr = d.executionAccountingError(sc, runErr)
 
 	runtrace.FinishRun(ctx, r.deps.Repo, key, sc.JobRunID, usage, runErr, r.clock())
 

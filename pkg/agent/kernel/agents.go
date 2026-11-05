@@ -34,6 +34,10 @@ const (
 	// AgentJobSimple is the ReAct agent behind a Job configured with the simple
 	// strategy.
 	AgentJobSimple agentkit.AgentName = "job-simple"
+	// AgentJobCascade coordinates a main attempt and an optional advisor stage.
+	AgentJobCascade agentkit.AgentName = "job-cascade"
+	// AgentJobCascadeMain runs the write-barrier protected initial attempt.
+	AgentJobCascadeMain agentkit.AgentName = "job-cascade-main"
 	// AgentAssist is the ReAct agent behind the assist batch command.
 	AgentAssist agentkit.AgentName = "assist"
 	// AgentTask is the ReAct sub-agent a plan-execute agent spawns per planned

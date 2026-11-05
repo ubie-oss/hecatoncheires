@@ -1,6 +1,7 @@
 package kernel
 
 import (
+	"context"
 	"github.com/gollem-dev/agentkit"
 	"github.com/gollem-dev/gollem"
 
@@ -93,3 +94,37 @@ const (
 func ToolErrorValuesHandlerForTest(next agentkit.ToolCallHandler) agentkit.ToolCallHandler {
 	return toolErrorValuesMiddleware()(next)
 }
+
+type DurableUsageRecordForTest = durableUsageRecord
+type DurableAncestorsKeyForTest = durableAncestorsKey
+type DurableUsageContextKeyForTest = durableUsageContextKey
+type UsagePhaseKeyForTest = usagePhaseKey
+
+const UsagePendingEventForTest = usagePendingEvent
+const UsageCompletedEventForTest = usageCompletedEvent
+const CascadeWriteEventForTest = cascadeWriteEvent
+
+var DurableUsageForEffectForTest = durableUsageForEffect
+var DurableUsageToolMiddlewareForTest = durableUsageToolMiddleware
+var CascadeWriteMiddlewareForTest = cascadeWriteMiddleware
+
+func BindUsageForTest(p ModelPolicy, repo agentkit.Repository) { p.durableUsage.bind(repo) }
+func LoadUsageForTest(ctx context.Context, p ModelPolicy, root string) error {
+	return p.durableUsage.load(ctx, root)
+}
+func AppendUsageForTest(ctx context.Context, p ModelPolicy, c durableUsageRecord) error {
+	return p.durableUsage.append(ctx, c)
+}
+func ProcessCostForTest(p ModelPolicy, root, pid string) (pricing.NanoUSD, bool) {
+	return p.durableUsage.processCost(root, pid)
+}
+func UsageCacheEmptyForTest(p ModelPolicy) bool {
+	return len(p.durableUsage.calls) == 0 && len(p.durableUsage.loaded) == 0 && len(p.durableUsage.scopes) == 0 && len(p.durableUsage.active) == 0
+}
+
+type UsageCallForTest = usageCall
+
+var UsageForEffectForTest = usageForEffect
+var DurableUsageGenerateMiddlewareForTest = durableUsageGenerateMiddleware
+
+var DurableUsageClaimMiddlewareForTest = durableUsageClaimMiddleware

@@ -3,6 +3,11 @@ package job
 import (
 	"context"
 	"log/slog"
+
+	"github.com/gollem-dev/agentkit"
+	agentkernel "github.com/m-mizutani/hecatoncheires/pkg/agent/kernel"
+	"github.com/m-mizutani/hecatoncheires/pkg/agent/react"
+	"github.com/m-mizutani/hecatoncheires/pkg/usecase/agent/planexec"
 	"time"
 
 	goslack "github.com/slack-go/slack"
@@ -171,3 +176,48 @@ const (
 // CASE thread, not the run's operational log thread — is easy to get wrong and
 // invisible from the outside, so it is pinned by a test.
 var CaseTaskContextForTest = caseTaskContext
+
+// CascadeInputForTest exposes the controller's immutable launch data.
+type CascadeInputForTest = cascadeInput
+
+// CascadeMainInputForTest exposes the single-loop launch data.
+type CascadeMainInputForTest = cascadeMainInput
+
+// CascadeStateForTest exposes controller checkpoints for persistence assertions.
+type CascadeStateForTest = cascadeState
+
+// CascadeMainStateForTest exposes the pre-write checkpoint.
+type CascadeMainStateForTest = cascadeMainState
+
+// CascadeEscalationToolNameForTest names the host-owned handoff control.
+const CascadeEscalationToolNameForTest = cascadeEscalationToolName
+
+// ResolvedExecutionForTest exposes the immutable policy resolution.
+var ResolvedExecutionForTest = resolvedExecution
+
+// RegisterCascadeForTest registers the controller without business completion hooks.
+func RegisterCascadeForTest(reg *agentkit.Registry, d *DurableRuntime, limiter agentkit.Limiter) (agentkit.Agent[cascadeInput], error) {
+	main, err := agentkit.Register(reg, agentkernel.AgentJobCascadeMain, 1, &cascadeMainStrategy{limiter: limiter}, agentkit.WithHistoryStore[cascadeMainOutput](d.History))
+	if err != nil {
+		return agentkit.Agent[cascadeInput]{}, err
+	}
+	d.cascadeMain = main
+	d.simple, err = react.Register(reg, agentkernel.AgentJobSimple, 1, limiter, agentkit.WithHistoryStore[react.Output](d.History))
+	if err != nil {
+		return agentkit.Agent[cascadeInput]{}, err
+	}
+	d.planexec, err = planexec.Register(reg, agentkernel.AgentJob, 1, d.simple, nil, limiter, planexec.Config[planexec.TextResult]{TextOnly: true}, agentkit.WithHistoryStore[planexec.Output[planexec.TextResult]](d.History))
+	if err != nil {
+		return agentkit.Agent[cascadeInput]{}, err
+	}
+	return agentkit.Register(reg, agentkernel.AgentJobCascade, 1, &cascadeStrategy{runtime: d, limiter: limiter})
+}
+
+// RenderExecutionPromptForTest renders the host execution instruction templates.
+func RenderExecutionPromptForTest(system string, orchestrator, handoff bool) (string, error) {
+	tmpl := cascadeMainPrompt
+	if orchestrator {
+		tmpl = orchestratorPrompt
+	}
+	return renderExecutionPrompt(tmpl, executionPromptInput{SystemPrompt: system, AllowHandoff: handoff})
+}

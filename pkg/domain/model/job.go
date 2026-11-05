@@ -282,6 +282,9 @@ type Job struct {
 	// `validate`.
 	LLMModel string
 
+	// Execution is an optional job-local model and orchestration policy.
+	Execution *JobExecution `json:",omitempty"`
+
 	// Budget is the greatest amount one run of this Job may spend, in nano USD.
 	// Zero means the deployment's default budget applies.
 	Budget pricing.NanoUSD
@@ -324,6 +327,12 @@ func (j *Job) Validate() error {
 		return goerr.New("job strategy is invalid",
 			goerr.V("job_id", j.ID),
 			goerr.V("strategy", string(j.Strategy)))
+	}
+	if err := j.Execution.Validate(); err != nil {
+		return goerr.Wrap(err, "invalid job execution", goerr.V("job_id", j.ID))
+	}
+	if j.Execution != nil && j.Execution.AppliesTo(j.Strategy) && j.Interactive && j.Execution.Cascade {
+		return goerr.New("interactive jobs do not support cascade execution", goerr.V("job_id", j.ID))
 	}
 	// Interactive relies on the planexec Question mechanism; the simple
 	// single-loop runtime has no way to solicit input mid-run. Reject the

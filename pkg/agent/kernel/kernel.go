@@ -147,18 +147,28 @@ func Build(d Deps) (*agentkit.Kernel, error) {
 	if err := d.Validate(); err != nil {
 		return nil, goerr.Wrap(err, "validate kernel deps")
 	}
+	d.Models.durableUsage.bind(d.Repo)
 
 	factory, err := NewToolFactory(d.Tools)
 	if err != nil {
 		return nil, goerr.Wrap(err, "build agent tool factory")
 	}
 
+	probe, err := NewToolSetProbe(d.Tools)
+	if err != nil {
+		return nil, goerr.Wrap(err, "build cascade tool probe")
+	}
 	opts := []agentkit.KernelOption{
 		agentkit.WithToolFactory(factory),
 		// The role rewrite goes FIRST, so every middleware after it — and the
 		// resolution agentkit itself performs — sees the role the run's model
 		// selects rather than the one the strategy asked for.
 		agentkit.WithGenerateMiddleware(modelRoleMiddleware(d.Models)),
+		agentkit.WithClaimMiddleware(durableUsageClaimMiddleware(d.Models)),
+		agentkit.WithStepMiddleware(durableUsageStepMiddleware(d.Models)),
+		agentkit.WithGenerateMiddleware(durableUsageGenerateMiddleware(d.Models)),
+		agentkit.WithToolCallMiddleware(durableUsageToolMiddleware(d.Models)),
+		agentkit.WithToolCallMiddleware(cascadeWriteMiddleware(d.Models, probe)),
 		// The gate goes OUTSIDE the observability bracket: a claim refused for
 		// want of capacity did nothing, so opening a trace and a run-scoped
 		// logger for it would file an empty archive on every backoff.
@@ -184,7 +194,7 @@ func Build(d Deps) (*agentkit.Kernel, error) {
 	// built with, so a binding added later would never be found.
 	opts = append(opts, d.Models.kernelOptions()...)
 
-	k, err := agentkit.New(d.Repo, d.LLM, d.Agents, opts...)
+	k, err := agentkit.New(d.Repo, d.Models.WrapClient(d.Models.defaultRef, d.LLM), d.Agents, opts...)
 	if err != nil {
 		return nil, goerr.Wrap(err, "build agent kernel")
 	}

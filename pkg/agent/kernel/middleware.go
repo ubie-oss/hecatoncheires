@@ -204,7 +204,27 @@ func claimTraceMetadata(proc *agentkit.Process, sc Scope) trace.TraceMetadata {
 func modelRoleMiddleware(policy ModelPolicy) agentkit.GenerateMiddleware {
 	return func(next agentkit.GenerateHandler) agentkit.GenerateHandler {
 		return func(ctx context.Context, req *agentkit.GenerateRequest) (*agentkit.GenerateResult, error) {
-			if role := policy.roleFor(req.Effect.Metadata); role != nil {
+			sc := executionScopeForAgent(ScopeFrom(req.Effect.Metadata), req.Effect.Agent)
+			if sc.hasJobExecution() {
+				if err := sc.JobExecution.Validate(); err != nil {
+					return nil, goerr.Wrap(err, "invalid pinned job execution")
+				}
+				ref := sc.executionModelRef()
+				if ref == "" {
+					ref = policy.defaultRef
+				}
+				if _, ok := policy.defs[ref]; !ok {
+					return nil, goerr.New("pinned job execution model is not defined", goerr.V("ref", ref))
+				}
+				if ref != policy.defaultRef && policy.roles[ref] == nil {
+					return nil, goerr.New("pinned job execution model has no client", goerr.V("ref", ref))
+				}
+				// A nil role explicitly selects the default positional client.
+				req.Role = policy.roles[ref]
+				return next(ctx, req)
+			}
+
+			if role := policy.roles[sc.LLMModel]; role != nil {
 				req.Role = role
 			}
 			return next(ctx, req)

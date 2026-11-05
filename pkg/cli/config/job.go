@@ -65,7 +65,8 @@ type JobSection struct {
 	// name when it declares no alias). Empty uses the deployment's default
 	// model. Only the NAME's shape is checked here — whether it is defined
 	// lives in another document, and is checked by ValidateJobModels.
-	LLMModel string `toml:"llm_model"`
+	LLMModel  string               `toml:"llm_model"`
+	Execution *JobExecutionSection `toml:"execution"`
 	// BudgetUSD is the greatest amount in USD one run of this Job may spend,
 	// sub-agents included. Zero (the default) uses the deployment's default
 	// budget.
@@ -138,6 +139,13 @@ func (s *JobSection) Validate(baseDir string) (*model.Job, error) {
 	if err != nil {
 		return nil, goerr.Wrap(err, "invalid job budget", goerr.V("job_id", s.ID))
 	}
+	execution, err := s.Execution.toModel(s.LLMModel)
+	if err != nil {
+		return nil, goerr.Wrap(err, "invalid job execution", goerr.V("job_id", s.ID))
+	}
+	if s.Interactive && execution != nil && execution.AppliesTo(strategy) && execution.Cascade {
+		return nil, goerr.New("interactive jobs do not support cascade execution", goerr.V("job_id", s.ID))
+	}
 
 	job := &model.Job{
 		ID:          s.ID,
@@ -150,6 +158,7 @@ func (s *JobSection) Validate(baseDir string) (*model.Job, error) {
 		Interactive: s.Interactive,
 		Reflection:  s.Reflection,
 		LLMModel:    s.LLMModel,
+		Execution:   execution,
 		Budget:      budget,
 		Events:      *events,
 	}

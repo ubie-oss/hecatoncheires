@@ -1399,6 +1399,9 @@ time.
 
 ### Execution strategy
 
+Job-local model orchestration and optional escalation are configured with
+`[job.execution]`; see [Execution policy](#execution-policy-jobexecution).
+
 The `strategy` field selects which runtime drives the Job's LLM loop.
 Defaults to `simple`, which is the v1 behaviour: a single
 `gollem.Agent.Execute` call with the configured tool set. Set it to
@@ -1424,6 +1427,99 @@ events.case = { on = ["created"] }
 |----------|-------------|
 | `simple` (default) | Single-step actions: post a digest, set a status, send a Slack reply. The Job's prompt is a direct instruction the agent executes in one ReAct loop. |
 | `planexec` | Multi-step investigations: pull context from several sources, cross-reference, and produce a structured summary. Each round runs up to 5 sub-agent tasks in parallel; how many rounds a turn gets is decided by its budget and step ceiling rather than by a round count. See [cli.md](./cli.md#agent-runtime-budgets). |
+
+### Execution policy (`job.execution`)
+
+Each workspace can tune individual Jobs without changing the deployment's
+other agents. Add an execution table below the corresponding `[[job]]`:
+
+```toml
+[job.execution]
+mode = "orchestrator"
+cascade = true
+apply_to = ["job", "job-simple"]
+
+[job.execution.models]
+main = "claude-haiku-5-5"
+sub = "claude-haiku-5-5"
+advisor = "claude-sonnet-5-5"
+```
+
+These are concrete model IDs, not reserved role aliases. Declare matching
+`[[llm_model]]` entries in the global configuration with `alias` omitted,
+including their provider and prices. Existing aliases remain supported when a
+deployment needs multiple reasoning configurations for the same model. See
+[Model definitions](#model-definitions-llm_model) and the provider's
+[model ID reference](https://platform.claude.com/docs/en/models/overview).
+The example does not prescribe model availability, prices or expected savings.
+A complete workspace example is in
+[`examples/job-execution.toml`](../examples/job-execution.toml).
+
+Orchestration and cascade are independent choices:
+
+| `mode` | `cascade` | Execution |
+|---|---|---|
+| `standard` | `false` | Preserve the original strategy; a planexec parent uses main and its tasks use sub. |
+| `orchestrator` | `false` | Main plans and judges; sub agents gather evidence and perform specifically delegated operations. The parent has no business tools. |
+| `standard` | `true` | Start with a single main conversation. If a handoff is needed before writes, advisor executes the original strategy with a fresh history. Advisor's tasks also use advisor. |
+| `orchestrator` | `true` | Main and sub execute as an orchestrator. A safe handoff replaces main with advisor while tasks continue using sub. |
+
+| Field | Default / meaning |
+|---|---|
+| `mode` | `standard`. Only `standard` and `orchestrator` are accepted. |
+| `cascade` | `false`. When enabled, `models.advisor` is required. |
+| `apply_to` | Both `job` and `job-simple`. These name the original planexec and simple strategies, respectively. An explicit list must be nonempty and have no duplicates. |
+| `models.main` | Inherit the Job's `llm_model`, then the deployment default. If both explicit main and `llm_model` are set, they must agree. |
+| `models.sub` | Inherit main. Used for planexec tasks and combined-mode advisor tasks. |
+| `models.advisor` | The replacement execution model for a cascade handoff; required only with `cascade = true`. |
+
+`apply_to` is evaluated before an orchestrator promotes simple to planexec.
+For example, `apply_to = ["job"]` leaves a simple Job's original model,
+strategy and tools unchanged, including ignoring execution-role overrides.
+Omitting the entire execution table preserves the previous behavior.
+There is no top-level `job_execution` configuration. Unknown execution keys,
+unknown modes, undefined model references and invalid types fail configuration
+validation rather than silently disabling the requested behavior.
+
+#### Backward compatibility
+
+Existing documented configurations do not need a migration. Without a
+`[job.execution]` table, a Job keeps its original simple or planexec strategy,
+`llm_model` or deployment-default model, budget, tool palette, event
+subscriptions, interaction and reflection settings. It does not automatically
+delegate additional work, start an advisor, or enable per-call execution-policy
+accounting. Existing unknown top-level keys remain ignored; in particular,
+`job_execution` is not interpreted as a deployment-wide policy.
+
+Unset execution policy fields are omitted from the Job's JSON representation.
+Existing prompt-template field and method access remains supported. Whole Go
+struct debug rendering can reflect newly added fields and is not a stable
+formatting contract.
+
+Separately, terminal cancellation now clears stale question/response targets,
+including for existing jobs. This fixes an invalid suspended-run record; it does
+not change model selection or enable the new execution policy.
+
+A cascade remains one logical Job run with one original budget. Main receives
+half the available run budget; advisor receives what remains of the original
+total after main and its tasks. Actual usage is charged at each model's
+configured rate and persisted so a new worker can restore the accounting.
+Unknown usage stops further spending. The budget remains a soft operational
+ceiling, as described in [Runtime budgets](cli.md#agent-runtime-budgets).
+
+Before starting advisor, the controller checks durable write-attempt barriers
+for the entire main subtree, including sub agents. Once any business write has
+been attempted, handoff is refused. There is no rollback: a failed or held run
+may retain partial effects. A held run does not disable future scheduled runs.
+Advisor starts at most once with a fresh history, so handoff can repeat reads.
+Its completion is not a guarantee of semantic correctness, and a main that
+finishes without recognizing its own mistake does not automatically escalate.
+
+Cascade is currently incompatible with `interactive = true` on an applicable
+Job; validation rejects the combination without turning interaction off.
+The policy and role references are captured at run creation, but provider
+model versions and the global definitions behind those references are not
+fully versioned. Reflection remains a separate existing execution path.
 
 ### Interactive Jobs (`interactive`)
 
@@ -2011,7 +2107,8 @@ See `examples/global.toml` for a complete example.
 
 Which models this deployment may use — and what each costs — is declared here,
 and **only** here. A Job's `llm_model` and the `--llm-model` flag both name one
-of these entries by reference name; a name no entry defines is refused at startup
+of these entries by reference name; the same applies to each
+`job.execution.models` role. A name no entry defines is refused at startup
 and by `hecatoncheires validate`.
 
 ```toml

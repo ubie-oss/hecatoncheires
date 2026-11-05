@@ -90,6 +90,19 @@ func TestJobModelRefs(t *testing.T) {
 		)
 		gt.Array(t, cli.JobModelRefsForTest(reg)).Length(0)
 	})
+	t.Run("all execution roles across workspaces", func(t *testing.T) {
+		reg := jobRegistry(&model.Job{ID: "roles", Execution: &model.JobExecution{
+			Models: model.JobExecutionModels{Main: "parent", Sub: "reader", Advisor: "expert"},
+		}})
+		reg.Register(&model.WorkspaceEntry{
+			Workspace: model.Workspace{ID: "other", Name: "other"},
+			Jobs: []*model.Job{
+				{ID: "another", Execution: &model.JobExecution{Models: model.JobExecutionModels{Main: "reader", Advisor: "specialist"}}},
+				{ID: "disabled", Disabled: true, Execution: &model.JobExecution{Models: model.JobExecutionModels{Main: "unused"}}},
+			},
+		})
+		gt.Array(t, cli.JobModelRefsForTest(reg)).Equal([]string{"expert", "parent", "reader", "specialist"})
+	})
 }
 
 // TestBuildLLMSetupDisabled pins that a deployment with no model named still

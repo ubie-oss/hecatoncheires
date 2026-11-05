@@ -14,7 +14,9 @@ import (
 
 	agentkernel "github.com/m-mizutani/hecatoncheires/pkg/agent/kernel"
 	"github.com/m-mizutani/hecatoncheires/pkg/agent/react"
+	"github.com/m-mizutani/hecatoncheires/pkg/agent/tool"
 	"github.com/m-mizutani/hecatoncheires/pkg/agent/toolargs"
+	"github.com/m-mizutani/hecatoncheires/pkg/domain/model"
 	"github.com/m-mizutani/hecatoncheires/pkg/utils/errutil"
 	"github.com/m-mizutani/hecatoncheires/pkg/utils/pricing"
 )
@@ -55,6 +57,11 @@ var (
 // Everything the runtime supplies itself — history, traces, tools, the question
 // channel — is deliberately absent.
 type Input struct {
+	// HandoffTool lets a host offer an explicit, effect-free terminal handoff.
+	// The host owns the tool schema and decides whether a fresh stage is safe.
+	// Nil preserves the ordinary planning lifecycle.
+	HandoffTool *gollem.ToolSpec `json:"handoff_tool,omitempty"`
+
 	// SystemPrompt is the host's base persona prompt. The planner prompt is
 	// rendered around it.
 	SystemPrompt string `json:"system_prompt"`
@@ -169,12 +176,15 @@ const (
 	OutputQuestion OutputKind = "question"
 	// OutputFallback is a turn that reached no conclusion.
 	OutputFallback OutputKind = "fallback"
+	// OutputHandoff asks the host to transfer control without another tool call.
+	OutputHandoff OutputKind = "handoff"
 )
 
 // Output is what a finished run produces. Exactly one of Data / Text / Question
 // carries the payload, selected by Kind.
 type Output[T any] struct {
-	Kind OutputKind `json:"kind"`
+	Kind          OutputKind `json:"kind"`
+	HandoffReason string     `json:"handoff_reason,omitempty"`
 	// Data is the validated structured output. Set only for OutputFinal on a
 	// structured host.
 	Data *T `json:"data,omitempty"`
@@ -694,6 +704,13 @@ func (s *strategy[T]) stepPlannerTool(ctx context.Context, sys agentkit.Syscalls
 
 	call := st.PendingCalls[0]
 	st.PendingCalls = st.PendingCalls[1:]
+	if call != nil && st.Input.HandoffTool != nil && call.Name == st.Input.HandoffTool.Name {
+		if err := st.Input.HandoffTool.ValidateArgs(call.Arguments); err != nil {
+			return st, agentkit.Decision[Output[T]]{}, goerr.Wrap(err, "planexec: invalid handoff request")
+		}
+		reason, _ := call.Arguments["reason"].(string)
+		return st, agentkit.Done(Output[T]{Kind: OutputHandoff, HandoffReason: reason, Observations: st.Observations}), nil
+	}
 	if call != nil {
 		if _, err := sys.Session().CallTool(ctx, toolargs.Coerce(sys.Tools(), *call)); err != nil {
 			if errors.Is(err, agentkit.ErrLimitExceeded) {
@@ -1259,6 +1276,10 @@ func (s *strategy[T]) spawnChild(ctx context.Context, sys agentkit.Syscalls,
 	// into it, so building a fresh one here would drop the workspace and case the
 	// child needs to have any tools at all.
 	meta := agentkernel.WithToolSets(sys.Metadata(), tools)
+	if scope := agentkernel.ScopeFrom(meta); scope.JobExecution != nil &&
+		(scope.StageRole != agentkernel.StageRoleAdvisor || scope.JobExecution.Mode == model.JobExecutionModeOrchestrator) {
+		meta = agentkernel.WithStageRole(meta, agentkernel.StageRoleSub)
+	}
 	// A nil budget leaves the parent's own figure in place, which is what a host
 	// that wired no Config.Remaining gets: the child is judged against the run's
 	// budget on its own metrics.
@@ -1532,10 +1553,14 @@ func toolDirectiveFor(st state) toolDirective {
 // Claude rejects a history carrying thinking blocks under a different tool list);
 // changing tool_choice invalidates neither.
 func toolCallOptions(st state) []agentkit.GenerateOption {
-	if !toolDirectiveFor(st).disableToolCalls {
-		return nil
+	var opts []agentkit.GenerateOption
+	if st.Input.HandoffTool != nil {
+		opts = append(opts, agentkit.WithTools(tool.NewControl(*st.Input.HandoffTool)))
 	}
-	return []agentkit.GenerateOption{agentkit.WithLLMOptions(gollem.WithToolCallsDisabled())}
+	if toolDirectiveFor(st).disableToolCalls {
+		opts = append(opts, agentkit.WithLLMOptions(gollem.WithToolCallsDisabled()))
+	}
+	return opts
 }
 
 // note draws a milestone as the whole of the run's progress message, replacing

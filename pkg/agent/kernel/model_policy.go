@@ -192,6 +192,7 @@ func (in ModelPolicyInput) Validate() error {
 		return goerr.New("the default budget must be positive",
 			goerr.V("default_budget", int64(in.DefaultBudget)))
 	}
+
 	return nil
 }
 
@@ -209,6 +210,7 @@ type ModelPolicy struct {
 	clients       map[string]gollem.LLMClient
 	defaultRef    string
 	defaultBudget pricing.NanoUSD
+	durableUsage  *durableUsageLedger
 }
 
 // NewModelPolicy builds the policy. One model role is defined per supplied
@@ -225,6 +227,7 @@ func NewModelPolicy(in ModelPolicyInput) (ModelPolicy, error) {
 		clients:       make(map[string]gollem.LLMClient, len(in.Clients)),
 		defaultRef:    in.DefaultRef,
 		defaultBudget: in.DefaultBudget,
+		durableUsage:  newDurableUsageLedger(),
 	}
 	for _, d := range in.Defs {
 		p.defs[d.Ref] = d
@@ -246,18 +249,32 @@ func (p ModelPolicy) IsZero() bool { return len(p.defs) == 0 }
 // Refs lists every defined reference name, sorted. For error messages and tests.
 func (p ModelPolicy) Refs() []string { return slices.Sorted(maps.Keys(p.defs)) }
 
+// DefaultRef is the startup-resolved alias a fresh run inherits when no model
+// was specified. Hosts pin it into execution scopes before persisting a run.
+func (p ModelPolicy) DefaultRef() string { return p.defaultRef }
+
 // Resolve returns what this run is judged against: its budget and the price of
 // the model it generates through. It takes the Process because that is what the
 // Limiter contract hands it.
 func (p ModelPolicy) Resolve(proc *agentkit.Process) budget.RunLimit {
 	var sc Scope
 	if proc != nil {
-		sc = ScopeFrom(proc.Metadata)
+		sc = executionScopeForAgent(ScopeFrom(proc.Metadata), proc.Agent)
 	}
 	limit := budget.RunLimit{Budget: p.defaultBudget, Rate: p.defOf(sc).Rate}
+
 	if sc.Budget > 0 {
 		limit.Budget = sc.Budget
 	}
+	if sc.hasJobExecution() && proc != nil {
+		spent, known := p.durableUsage.processCost(string(proc.RootID), string(proc.ID))
+		if !known {
+			spent = -1 // RunLimit.Validate refuses unknown usage before another effect.
+		}
+		limit.Spent = &spent
+		return limit
+	}
+
 	return limit
 }
 
@@ -269,6 +286,11 @@ func (p ModelPolicy) Resolve(proc *agentkit.Process) budget.RunLimit {
 // one: a completion handler reads the scope to find the run's records, and
 // re-deriving it here would parse the same metadata twice.
 func (p ModelPolicy) Cost(sc Scope, m agentkit.Metrics) pricing.NanoUSD {
+	if sc.hasJobExecution() {
+		cost, _ := p.UsageCost(sc)
+		return cost
+	}
+
 	def := p.defOf(sc)
 	return def.Rate.Cost(m.InputTokens, m.OutputTokens,
 		m.CacheReadInputTokens, m.CacheCreationInputTokens)
@@ -291,6 +313,13 @@ func (p ModelPolicy) Remaining(m map[string]string, metrics agentkit.Metrics,
 	total = p.defaultBudget
 	if sc.Budget > 0 {
 		total = sc.Budget
+	}
+	if sc.hasJobExecution() {
+		spent, known := p.UsageCost(sc)
+		if known && spent < total {
+			remaining = total - spent
+		}
+		return remaining, total
 	}
 	if spent := p.Cost(sc, metrics); spent < total {
 		remaining = total - spent
@@ -320,14 +349,19 @@ func (p ModelPolicy) ModelName(sc Scope) string { return p.defOf(sc).Model }
 
 // defOf is the run's model definition.
 //
-// An empty or UNKNOWN reference name falls back to the default definition, and
-// that is deliberate: the role lookup falls back the same way, so a run whose
-// model was removed from the configuration generates with the default client and
-// is priced at the default rate. Pricing it at the removed model's rate would
-// meter it for a model it is not using.
+// Legacy scopes fall back to the default for an unknown reference, matching
+// their role lookup. An explicit job execution snapshot instead stays unpriced
+// when its pinned model was removed, so it cannot silently change providers.
 func (p ModelPolicy) defOf(sc Scope) ModelDef {
-	if def, ok := p.defs[sc.LLMModel]; ok {
+	if sc.hasJobExecution() && sc.JobExecution.Validate() != nil {
+		return ModelDef{}
+	}
+	ref := sc.executionModelRef()
+	if def, ok := p.defs[ref]; ok {
 		return def
+	}
+	if sc.hasJobExecution() && ref != "" {
+		return ModelDef{}
 	}
 	return p.defs[p.defaultRef]
 }
@@ -338,13 +372,7 @@ func (p ModelPolicy) defOf(sc Scope) ModelDef {
 func (p ModelPolicy) kernelOptions() []agentkit.KernelOption {
 	opts := make([]agentkit.KernelOption, 0, len(p.roles))
 	for _, ref := range slices.Sorted(maps.Keys(p.roles)) {
-		opts = append(opts, agentkit.WithModelRole(p.roles[ref], p.clients[ref]))
+		opts = append(opts, agentkit.WithModelRole(p.roles[ref], p.WrapClient(ref, p.clients[ref])))
 	}
 	return opts
-}
-
-// roleFor returns the model role a run's metadata selects, or nil when the run
-// generates through the default model.
-func (p ModelPolicy) roleFor(meta map[string]string) agentkit.ModelRole {
-	return p.roles[ScopeFrom(meta).LLMModel]
 }

@@ -239,6 +239,10 @@ type RunLimit struct {
 	Budget pricing.NanoUSD
 	// Rate prices the run's model. Must price input and output above zero.
 	Rate pricing.Rate
+	// Spent optionally supplies money already measured at each call's actual
+	// model rate. Mixed-model jobs use it because cumulative token counters
+	// cannot be priced at one rate. Nil preserves the token-based policy.
+	Spent *pricing.NanoUSD
 }
 
 // Validate reports whether this run can be bounded at all. A run that cannot is
@@ -250,6 +254,9 @@ func (l RunLimit) Validate() error {
 	if !l.Rate.IsPriced() {
 		return goerr.New("model rate must price input and output above zero",
 			goerr.V("input", int64(l.Rate.Input)), goerr.V("output", int64(l.Rate.Output)))
+	}
+	if l.Spent != nil && *l.Spent < 0 {
+		return goerr.New("measured spend must not be negative")
 	}
 	return nil
 }
@@ -288,6 +295,9 @@ func resolveSpend(resolve LimitResolver, proc *agentkit.Process, m agentkit.Metr
 	}
 	spent = limit.Rate.Cost(m.InputTokens, m.OutputTokens,
 		m.CacheReadInputTokens, m.CacheCreationInputTokens)
+	if limit.Spent != nil {
+		spent = *limit.Spent
+	}
 	return spent, limit, true
 }
 
