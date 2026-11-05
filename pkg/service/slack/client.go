@@ -203,6 +203,26 @@ var channelUnavailableErrors = map[string]bool{
 	"not_in_channel":    true,
 }
 
+// ErrUserNotFound is returned (wrapped) by GetUserInfo when Slack answers
+// that the user does not exist or is not visible to the bot.
+var ErrUserNotFound = goerr.New("slack user is not found")
+
+// userNotFoundErrors are the users.info errors that mean the user does not
+// exist for this bot.
+var userNotFoundErrors = map[string]bool{
+	"user_not_found":   true,
+	"user_not_visible": true,
+	"users_not_found":  true,
+}
+
+func isUserNotFound(err error) bool {
+	var resp slack.SlackErrorResponse
+	if errors.As(err, &resp) {
+		return userNotFoundErrors[resp.Err]
+	}
+	return false
+}
+
 func isChannelUnavailable(err error) bool {
 	var resp slack.SlackErrorResponse
 	if errors.As(err, &resp) {
@@ -272,6 +292,10 @@ func (c *client) GetChannelNames(ctx context.Context, ids []string) (map[string]
 func (c *client) GetUserInfo(ctx context.Context, userID string) (*User, error) {
 	user, err := c.api.GetUserInfoContext(ctx, userID)
 	if err != nil {
+		if isUserNotFound(err) {
+			return nil, goerr.Wrap(ErrUserNotFound, "failed to get user info",
+				goerr.V("user_id", userID), goerr.V("cause", err.Error()))
+		}
 		return nil, goerr.Wrap(err, "failed to get user info", goerr.V("user_id", userID))
 	}
 
@@ -282,6 +306,8 @@ func (c *client) GetUserInfo(ctx context.Context, userID string) (*User, error) 
 		Email:    user.Profile.Email,
 		ImageURL: user.Profile.Image48,
 		Locale:   user.Locale,
+		IsBot:    user.IsBot,
+		Deleted:  user.Deleted,
 	}, nil
 }
 

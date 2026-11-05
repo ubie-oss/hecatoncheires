@@ -11,6 +11,7 @@ import (
 
 	"github.com/gollem-dev/gollem"
 	"github.com/gollem-dev/gollem/mock"
+	"github.com/m-mizutani/goerr/v2"
 	"github.com/m-mizutani/gt"
 	goslack "github.com/slack-go/slack"
 
@@ -3723,6 +3724,101 @@ func seedSlackUsers(t *testing.T, repo interfaces.Repository, ids ...string) {
 		users = append(users, &model.SlackUser{ID: model.SlackUserID(id), Name: id})
 	}
 	gt.NoError(t, repo.SlackUser().SaveMany(context.Background(), users)).Required()
+}
+
+func TestCaseUseCase_AssignCase_ResolvesUnsyncedUsers(t *testing.T) {
+	// setup creates a Case through a CaseUseCase without Slack, then returns a
+	// second CaseUseCase over the same repository whose Slack service answers
+	// users.info with lookup. Only "UCREATOR" is in the SlackUser store.
+	setup := func(t *testing.T, lookup func(ctx context.Context, userID string) (*slack.User, error)) (*usecase.CaseUseCase, context.Context, int64, *[]string) {
+		t.Helper()
+		repo := memory.New()
+		registry := model.NewWorkspaceRegistry()
+		registry.Register(&model.WorkspaceEntry{
+			Workspace: model.Workspace{ID: testWorkspaceID, Name: "Test Workspace"},
+		})
+		seedSlackUsers(t, repo, "UCREATOR")
+		ctx := auth.ContextWithToken(context.Background(), &auth.Token{Sub: "UCREATOR"})
+		created, err := usecase.NewCaseUseCase(repo, registry, nil, nil, "").
+			CreateCase(ctx, testWorkspaceID, "Title", "Desc", nil, nil, false, false, "", "")
+		gt.NoError(t, err).Required()
+
+		var asked []string
+		slackMock := &mockSlackService{
+			getUserInfoFn: func(ctx context.Context, userID string) (*slack.User, error) {
+				asked = append(asked, userID)
+				return lookup(ctx, userID)
+			},
+		}
+		return usecase.NewCaseUseCase(repo, registry, slackMock, nil, ""), ctx, created.ID, &asked
+	}
+
+	t.Run("accepts a human user Slack knows but the store does not", func(t *testing.T) {
+		uc, ctx, caseID, asked := setup(t, func(_ context.Context, userID string) (*slack.User, error) {
+			return &slack.User{ID: userID, Name: "unsynced"}, nil
+		})
+		updated, err := uc.AssignCase(ctx, testWorkspaceID, caseID, []string{"UUNSYNCED"})
+		gt.NoError(t, err).Required()
+		gt.Array(t, updated.AssigneeIDs).Equal([]string{"UUNSYNCED"})
+		gt.Array(t, *asked).Equal([]string{"UUNSYNCED"})
+	})
+
+	t.Run("does not ask Slack about users in the store", func(t *testing.T) {
+		uc, ctx, caseID, asked := setup(t, func(_ context.Context, userID string) (*slack.User, error) {
+			return &slack.User{ID: userID}, nil
+		})
+		_, err := uc.AssignCase(ctx, testWorkspaceID, caseID, []string{"UCREATOR"})
+		gt.NoError(t, err).Required()
+		gt.Array(t, *asked).Length(0)
+	})
+
+	t.Run("rejects a user Slack reports as not found", func(t *testing.T) {
+		uc, ctx, caseID, _ := setup(t, func(_ context.Context, userID string) (*slack.User, error) {
+			return nil, goerr.Wrap(slack.ErrUserNotFound, "users.info", goerr.V("user_id", userID))
+		})
+		_, err := uc.AssignCase(ctx, testWorkspaceID, caseID, []string{"UGHOST"})
+		gt.Error(t, err).Is(usecase.ErrUnknownUser)
+	})
+
+	t.Run("rejects a bot user", func(t *testing.T) {
+		uc, ctx, caseID, _ := setup(t, func(_ context.Context, userID string) (*slack.User, error) {
+			return &slack.User{ID: userID, IsBot: true}, nil
+		})
+		_, err := uc.AssignCase(ctx, testWorkspaceID, caseID, []string{"UBOT"})
+		gt.Error(t, err).Is(usecase.ErrUnknownUser)
+	})
+
+	t.Run("rejects a deleted user", func(t *testing.T) {
+		uc, ctx, caseID, _ := setup(t, func(_ context.Context, userID string) (*slack.User, error) {
+			return &slack.User{ID: userID, Deleted: true}, nil
+		})
+		_, err := uc.AssignCase(ctx, testWorkspaceID, caseID, []string{"UGONE"})
+		gt.Error(t, err).Is(usecase.ErrUnknownUser)
+	})
+
+	t.Run("reports only the ids that stay unknown", func(t *testing.T) {
+		uc, ctx, caseID, _ := setup(t, func(_ context.Context, userID string) (*slack.User, error) {
+			if userID == "UGHOST" {
+				return nil, goerr.Wrap(slack.ErrUserNotFound, "users.info")
+			}
+			return &slack.User{ID: userID}, nil
+		})
+		_, err := uc.AssignCase(ctx, testWorkspaceID, caseID, []string{"UUNSYNCED", "UGHOST"})
+		gt.Error(t, err).Is(usecase.ErrUnknownUser)
+		var ge *goerr.Error
+		gt.Bool(t, errors.As(err, &ge)).True().Required()
+		gt.Value(t, ge.Values()["missing_user_ids"]).Equal([]string{"UGHOST"})
+	})
+
+	t.Run("propagates other Slack failures", func(t *testing.T) {
+		boom := goerr.New("slack is down")
+		uc, ctx, caseID, _ := setup(t, func(_ context.Context, _ string) (*slack.User, error) {
+			return nil, boom
+		})
+		_, err := uc.AssignCase(ctx, testWorkspaceID, caseID, []string{"UUNSYNCED"})
+		gt.Error(t, err).Is(boom)
+		gt.Bool(t, errors.Is(err, usecase.ErrUnknownUser)).False()
+	})
 }
 
 func TestCaseUseCase_UpdateCase_UserExistence(t *testing.T) {

@@ -974,6 +974,14 @@ The background user refresh worker behaves differently based on the app type:
 - **Org-Level App**: Calls `auth.teams.list` to discover all installed workspaces, then calls `users.list` with each Team ID. Users are deduplicated across workspaces
 - **WS-Level App**: Calls `users.list` without a Team ID (single workspace, same as before)
 
+Case writes (assignees and user / multi-user field values) accept a user id
+that the synced user list does not hold if Slack's `users.info` returns a
+human, non-deleted user for it. This covers users the bot can see but
+`users.list` does not return, such as members of another workspace in a shared
+channel, and users who joined after the last refresh. The looked-up user is
+not added to the synced list, so it still does not appear in user pickers or
+show a display name in the Web UI until a refresh returns it.
+
 ### Enterprise Grid Troubleshooting
 
 #### Only users from one workspace are fetched

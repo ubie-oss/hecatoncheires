@@ -274,4 +274,8 @@ type User struct {
 	Email    string
 	ImageURL string
 	Locale   string
+	// IsBot and Deleted are populated by GetUserInfo. ListUsers never
+	// returns such users, so they are always false in its results.
+	IsBot   bool
+	Deleted bool
 }

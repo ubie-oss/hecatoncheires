@@ -144,9 +144,9 @@ const (
 // Slack paths enforce identical rules. It (1) runs the workspace field
 // validator in the requested mode, enriching each value with its config Type,
 // and (2) verifies that every referenced user id — assignees plus the values
-// of user / multi-user fields — exists in the SlackUser store. A missing user
-// is rejected with ErrUnknownUser (Slack sync delay is treated as
-// non-existence per project policy). A nil workspace validator skips the field
+// of user / multi-user fields — exists in the SlackUser store, or failing
+// that, in Slack itself (users.info). A user neither knows is rejected with
+// ErrUnknownUser. A nil workspace validator skips the field
 // checks (no schema configured) but the user-existence check still runs.
 // Returns the enriched field values (nil-safe: a nil fieldValues yields nil).
 func (uc *CaseUseCase) validateCaseWrite(
@@ -353,6 +353,9 @@ func caseRefIDs(fv model.FieldValue) ([]int64, error) {
 // verifyUsersExist collects every user id referenced by the write — the
 // assignees plus the values of user / multi-user custom fields — and confirms
 // each exists in the SlackUser store with a single batch lookup (N+1-safe).
+// Ids the store does not hold are then checked against Slack one by one via
+// resolveUnsyncedUsers; only those ids hit the API, so the common case stays a
+// single store lookup.
 // Reporter is intentionally NOT checked: it is set from the auth context /
 // inbound Slack event, where the user provably exists even if the periodic
 // SlackUser sync has not caught up yet. Unknown ids are reported together via
@@ -397,13 +400,51 @@ func (uc *CaseUseCase) verifyUsersExist(ctx context.Context, assigneeIDs []strin
 			missing = append(missing, id)
 		}
 	}
+	sort.Strings(missing)
+	missing, err = uc.resolveUnsyncedUsers(ctx, missing)
+	if err != nil {
+		return err
+	}
 	if len(missing) > 0 {
-		sort.Strings(missing)
 		return goerr.Wrap(ErrUnknownUser,
 			"unknown user id(s): "+strings.Join(missing, ", "),
 			goerr.V("missing_user_ids", missing))
 	}
 	return nil
+}
+
+// resolveUnsyncedUsers asks Slack (users.info) about each id the SlackUser
+// store does not hold and returns the ids that remain unknown. The store only
+// holds the users that users.list returns for the workspaces the app is
+// installed in, so a user the bot can still see from another workspace (for
+// example a member of a shared channel) is absent from it while being a real
+// person. An id is accepted when Slack returns a human, non-deleted user; it
+// stays unknown when Slack reports the user as not found or returns a bot or a
+// deleted user. Any other Slack failure is returned, so a transient error
+// neither accepts nor rejects the write silently. The resolved user is not
+// written to the store: the periodic sync replaces the whole store and would
+// drop it again.
+func (uc *CaseUseCase) resolveUnsyncedUsers(ctx context.Context, ids []string) ([]string, error) {
+	if len(ids) == 0 || uc.slackService == nil {
+		return ids, nil
+	}
+
+	var unknown []string
+	for _, id := range ids {
+		user, err := uc.slackService.GetUserInfo(ctx, id)
+		if err != nil {
+			if errors.Is(err, slack.ErrUserNotFound) {
+				unknown = append(unknown, id)
+				continue
+			}
+			return nil, goerr.Wrap(err, "failed to look up user missing from the SlackUser store",
+				goerr.V("user_id", id))
+		}
+		if user == nil || user.IsBot || user.Deleted {
+			unknown = append(unknown, id)
+		}
+	}
+	return unknown, nil
 }
 
 // coerceUserIDSlice extracts string ids from a multi-user field value, which
