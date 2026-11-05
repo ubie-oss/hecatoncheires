@@ -11,6 +11,13 @@ You CANNOT create or manage Actions and you CANNOT create drafts — this is a t
 {{ else -}}
 You CANNOT create or manage Actions and you CANNOT create drafts — this is a thread-mode case. Sub-agent tools are read-only.
 {{ end }}
+{{ if .WorkspaceDescription -}}
+# Workspace
+This case belongs to a workspace that describes itself as follows. Follow the conventions it sets.
+
+{{ .WorkspaceDescription }}
+
+{{ end -}}
 {{ with .Case -}}
 # Current case
 - Title: {{ .Title }}
@@ -32,9 +39,9 @@ You CANNOT create or manage Actions and you CANNOT create drafts — this is a t
 {{ end -}}
 {{ .SlackFormat }}
 
-{{ if .CreatePrompt -}}
+{{ if .WorkspacePrompt -}}
 # Workspace-specific instructions
-{{ .CreatePrompt }}
+{{ .WorkspacePrompt }}
 {{ end -}}
 {{ if .TriggerContext -}}
 # Trigger context

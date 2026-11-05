@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/m-mizutani/goerr/v2"
@@ -672,6 +673,31 @@ type = "text"
 	gt.Array(t, configs).Length(1).Required()
 	gt.String(t, configs[0].WorkspaceAgentPrompt).Equal("")
 	gt.Value(t, configs[0].WorkspaceChannelID).Equal("C0123456789")
+}
+
+// TestParseWorkspaceConfigs_CasePromptFileNotReadWithoutBaseDir covers the
+// [case.prompts] _file forms: with no BaseDir they are never read, so the parse
+// succeeds with the prompts left unresolved instead of reading the absolute
+// paths below.
+func TestParseWorkspaceConfigs_CasePromptFileNotReadWithoutBaseDir(t *testing.T) {
+	configs, err := config.ParseWorkspaceConfigs([]config.WorkspaceConfigSource{
+		{
+			Name: "risk.toml",
+			Data: []byte(`
+[workspace]
+id = "risk"
+name = "Risk"
+
+[case.prompts]
+create_file = "/nonexistent/prompts/create.md"
+mention_file = "/nonexistent/prompts/mention.md"
+`),
+		},
+	})
+	gt.NoError(t, err).Required()
+	gt.Array(t, configs).Length(1).Required()
+	gt.String(t, configs[0].CaseCreatePrompt).Equal("")
+	gt.String(t, configs[0].CaseMentionPrompt).Equal("")
 }
 
 func TestBuildWorkspaceRegistry(t *testing.T) {
@@ -1966,6 +1992,131 @@ name = "Done"
 		gt.NoError(t, err).Required()
 		gt.Array(t, configs).Length(1).Required()
 		gt.String(t, configs[0].CaseCreatePrompt).Equal("")
+	})
+}
+
+// TestLoadWorkspaceConfigs_CaseMentionPrompt tests [case.prompts].mention and
+// the _file forms of both phases: it is accepted in channel mode with no
+// [case.status] at all, carried into the registry entry the mention agents
+// read, read relative to the config file's directory, and checked for
+// inline / _file exclusivity and emptiness.
+func TestLoadWorkspaceConfigs_CaseMentionPrompt(t *testing.T) {
+	load := func(t *testing.T, content string, files map[string]string) ([]*config.WorkspaceConfig, error) {
+		t.Helper()
+		tmpDir := t.TempDir()
+		for name, body := range files {
+			path := filepath.Join(tmpDir, name)
+			gt.NoError(t, os.MkdirAll(filepath.Dir(path), 0755)).Required()
+			gt.NoError(t, os.WriteFile(path, []byte(body), 0644)).Required()
+		}
+		configPath := filepath.Join(tmpDir, "config.toml")
+		gt.NoError(t, os.WriteFile(configPath, []byte(content), 0644)).Required()
+		return config.LoadWorkspaceConfigs([]string{configPath})
+	}
+
+	t.Run("channel mode accepts a [case] section holding only [case.prompts]", func(t *testing.T) {
+		configs, err := load(t, `
+[workspace]
+id = "risk"
+description = "Every case tracks one vendor review."
+
+[case.prompts]
+mention = "Answer in at most five bullet points."
+`, nil)
+		gt.NoError(t, err).Required()
+		gt.Array(t, configs).Length(1).Required()
+		gt.Value(t, configs[0].CaseMode).Equal(model.CaseModeChannel)
+		gt.String(t, configs[0].CaseMentionPrompt).Equal("Answer in at most five bullet points.")
+		gt.String(t, configs[0].CaseCreatePrompt).Equal("")
+		// No status rows means no case status set, not a startup failure.
+		gt.Value(t, configs[0].CaseStatusSet).Nil()
+
+		entry, err := config.BuildWorkspaceRegistry(configs).Get("risk")
+		gt.NoError(t, err).Required()
+		gt.String(t, entry.CaseMentionPrompt).Equal("Answer in at most five bullet points.")
+		gt.String(t, entry.Workspace.Description).Equal("Every case tracks one vendor review.")
+	})
+
+	t.Run("thread mode loads both phases from their _file forms", func(t *testing.T) {
+		configs, err := load(t, `
+[workspace]
+id = "support"
+
+[slack]
+mode = "thread"
+channel = "C0123456789"
+
+[case]
+initial = "TRIAGE"
+closed = ["DONE"]
+
+[[case.status]]
+id = "TRIAGE"
+name = "Triage"
+
+[[case.status]]
+id = "DONE"
+name = "Done"
+
+[case.prompts]
+create_file = "create.md"
+mention_file = "prompts/mention.md"
+`, map[string]string{
+			"create.md":          "Ask for the affected region.\n",
+			"prompts/mention.md": "Keep replies short.\n\n",
+		})
+		gt.NoError(t, err).Required()
+		gt.Array(t, configs).Length(1).Required()
+		gt.String(t, configs[0].CaseCreatePrompt).Equal("Ask for the affected region.")
+		gt.String(t, configs[0].CaseMentionPrompt).Equal("Keep replies short.")
+	})
+
+	t.Run("an inline prompt and its _file form together are rejected", func(t *testing.T) {
+		for _, prompts := range []string{
+			"mention = \"Inline.\"\nmention_file = \"mention.md\"\n",
+			"create = \"Inline.\"\ncreate_file = \"create.md\"\n",
+		} {
+			_, err := load(t, "[workspace]\nid = \"risk\"\n\n[case.prompts]\n"+prompts, map[string]string{
+				"mention.md": "From file.",
+				"create.md":  "From file.",
+			})
+			gt.Error(t, err).Required()
+			gt.Bool(t, errors.Is(err, config.ErrCasePromptConflict)).True()
+		}
+	})
+
+	t.Run("a _file resolving to an empty file is rejected", func(t *testing.T) {
+		_, err := load(t, `
+[workspace]
+id = "risk"
+
+[case.prompts]
+mention_file = "mention.md"
+`, map[string]string{"mention.md": "  \n\t\n"})
+		gt.Error(t, err).Required()
+		gt.Bool(t, errors.Is(err, config.ErrCasePromptEmpty)).True()
+	})
+
+	t.Run("a missing _file is rejected", func(t *testing.T) {
+		_, err := load(t, `
+[workspace]
+id = "risk"
+
+[case.prompts]
+mention_file = "missing.md"
+`, nil)
+		gt.Error(t, err).Required()
+	})
+
+	t.Run("a mention prompt over the length cap is rejected", func(t *testing.T) {
+		_, err := load(t, `
+[workspace]
+id = "risk"
+
+[case.prompts]
+mention_file = "mention.md"
+`, map[string]string{"mention.md": strings.Repeat("a", model.AgentAdditionalPromptMaxLen+1)})
+		gt.Error(t, err).Required()
 	})
 }
 

@@ -30,9 +30,9 @@ mention agent) and a Job-safe subset.
 | `core__list_action_steps` | R | List the binary-state steps under an action. | |
 | `core__search_referenceable_cases` | R | Search the target workspace of a `case_ref` / `multi_case_ref` field for a case id to reference. | Only wired when the workspace defines such a field. Private and draft cases are excluded. |
 | `core__get_referenceable_cases` | R | Batch-fetch full details of referenced cases. | Same gating as above. Set the value itself via `case__update_case`'s `fields`. |
-| `core__create_action` | W | Create a new action. | |
+| `core__create_action` | W | Create a new action. | The `status` parameter lists every action status with its name, whether it is closed, and its `description` from `[[action.status]]`. |
 | `core__update_action` | W | Update an action's title / description / assignee. | Status changes go through `core__update_action_status`. |
-| `core__update_action_status` | W | Move an action to another status. | Action status is independent of case status; this is **not** a case close. |
+| `core__update_action_status` | W | Move an action to another status. | Action status is independent of case status; this is **not** a case close. The `status` parameter lists every status the same way `core__create_action` does. |
 | `core__set_action_assignee` | W | Set / clear the action assignee (empty string clears). | |
 | `core__add_action_step` | W | Add a step to an action. | |
 | `core__set_action_step_done` | W | Mark a step done / undone (idempotent). | |

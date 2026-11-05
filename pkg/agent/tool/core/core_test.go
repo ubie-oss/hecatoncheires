@@ -1064,3 +1064,42 @@ func TestListActionsTool_IncludeArchived(t *testing.T) {
 		gt.Value(t, gotOpts.ArchiveScope).Equal(interfaces.ActionArchiveScopeAll)
 	})
 }
+
+// The status parameters of core__create_action / core__update_action_status
+// carry each status's name, closed flag and description, not just the enum of
+// ids: a status set that encodes meaning in its ids cannot be used correctly
+// from the ids alone. Both the case-channel agent and the Job writer palette
+// build the same tools, so both are checked.
+func TestActionStatusParamsDescribeEachStatus(t *testing.T) {
+	set, err := model.NewActionStatusSet("REQ_OPEN", []string{"REQ_DONE"}, []model.ActionStatusDefinition{
+		{ID: "REQ_OPEN", Name: "Request open", Description: "A request waiting for review."},
+		{ID: "REQ_DONE", Name: "Request done"},
+		{ID: "REV_OPEN", Name: "Review open", Description: "  A review of a parent request action.  "},
+	})
+	gt.NoError(t, err).Required()
+
+	statusList := "Available statuses:\n" +
+		"- `REQ_OPEN` (Request open): A request waiting for review.\n" +
+		"- `REQ_DONE` (Request done, closed)\n" +
+		"- `REV_OPEN` (Review open): A review of a parent request action."
+
+	deps := core.Deps{Repo: newMockRepo(nil), WorkspaceID: testWorkspaceID, CaseID: testCaseID, ActionUC: &mockActionMutator{}, StatusSet: set}
+	for name, tools := range map[string][]gollem.Tool{
+		"New":             core.New(deps),
+		"NewWriterForJob": core.NewWriterForJob(deps),
+	} {
+		t.Run(name, func(t *testing.T) {
+			create := findTool(tools, "core__create_action")
+			gt.Value(t, create).NotNil().Required()
+			createStatus := create.Spec().Parameters["status"]
+			gt.Value(t, createStatus.Description).Equal("Initial status of the action (default: REQ_OPEN). " + statusList)
+			gt.Value(t, createStatus.Enum).Equal([]string{"REQ_OPEN", "REQ_DONE", "REV_OPEN"})
+
+			update := findTool(tools, "core__update_action_status")
+			gt.Value(t, update).NotNil().Required()
+			updateStatus := update.Spec().Parameters["status"]
+			gt.Value(t, updateStatus.Description).Equal("New status for the action. " + statusList)
+			gt.Value(t, updateStatus.Enum).Equal([]string{"REQ_OPEN", "REQ_DONE", "REV_OPEN"})
+		})
+	}
+}

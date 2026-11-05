@@ -48,7 +48,12 @@ type WorkspaceEntry struct {
 	// [case.prompts].create. Empty when unset; appended to the ModeCreate
 	// planner system prompt.
 	CaseCreatePrompt string
-	Jobs             []*Job // Event-driven agent jobs loaded from workspace TOML
+	// CaseMentionPrompt is the workspace-specific additional prompt for the
+	// agent that answers an @mention on an existing case: the case-channel
+	// agent in channel mode and the case-thread (ModeMention) agent in thread
+	// mode. Configured via TOML [case.prompts].mention; empty when unset.
+	CaseMentionPrompt string
+	Jobs              []*Job // Event-driven agent jobs loaded from workspace TOML
 
 	// CaseMode selects channel-per-case (default) or thread-per-case binding.
 	CaseMode CaseMode

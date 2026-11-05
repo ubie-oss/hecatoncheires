@@ -55,8 +55,15 @@ type systemPromptInput struct {
 	Fields          []systemPromptField
 	ClosedStatusIDs string
 	SlackFormat     string
-	// CreatePrompt and TriggerContext are rendered in ModeCreate only.
-	CreatePrompt   string
+	// WorkspaceDescription is [workspace] description, rendered in ModeMention
+	// only: it is the workspace's account of what a case is and how work in it
+	// is organized, which a turn acting on an existing case has to follow.
+	WorkspaceDescription string
+	// WorkspacePrompt is the operator-supplied prompt for the turn's phase:
+	// [case.prompts].create in ModeCreate, [case.prompts].mention in
+	// ModeMention, empty in ModeMaterialize.
+	WorkspacePrompt string
+	// TriggerContext is rendered in ModeCreate only.
 	TriggerContext string
 }
 
@@ -182,12 +189,20 @@ func buildSystemPrompt(c *model.Case, ws *model.WorkspaceEntry, mode Mode, creat
 	if mode == ModeCreate {
 		// Workspace-specific instructions from TOML [case.prompts].create.
 		if ws != nil && strings.TrimSpace(ws.CaseCreatePrompt) != "" {
-			in.CreatePrompt = ws.CaseCreatePrompt
+			in.WorkspacePrompt = ws.CaseCreatePrompt
 		}
 		// Host-supplied trigger context (e.g. reaction-initiated creation):
 		// per-turn, not per-workspace, and only meaningful while initializing.
 		if strings.TrimSpace(createInstruction) != "" {
 			in.TriggerContext = createInstruction
+		}
+	}
+
+	if mode == ModeMention && ws != nil {
+		in.WorkspaceDescription = strings.TrimSpace(ws.Workspace.Description)
+		// Workspace-specific instructions from TOML [case.prompts].mention.
+		if strings.TrimSpace(ws.CaseMentionPrompt) != "" {
+			in.WorkspacePrompt = ws.CaseMentionPrompt
 		}
 	}
 

@@ -78,6 +78,12 @@ var (
 	// ErrWorkspaceAgentPromptEmpty is returned when [slack.workspace_agent]
 	// prompt_file resolves to an empty file.
 	ErrWorkspaceAgentPromptEmpty = goerr.New("[slack.workspace_agent] prompt_file is empty")
+	// ErrCasePromptConflict is returned when a [case.prompts] phase sets both
+	// its inline key and its _file form (e.g. mention and mention_file).
+	ErrCasePromptConflict = goerr.New("[case.prompts] inline prompt and its _file form are mutually exclusive")
+	// ErrCasePromptEmpty is returned when a [case.prompts] _file resolves to an
+	// empty file.
+	ErrCasePromptEmpty = goerr.New("[case.prompts] prompt file is empty")
 	// ErrMissingReferenceWorkspace is returned when a case_ref /
 	// multi_case_ref field omits reference_workspace.
 	ErrMissingReferenceWorkspace = goerr.New("case_ref field requires reference_workspace")

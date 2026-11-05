@@ -225,12 +225,85 @@ type CaseSection struct {
 	Prompts CasePromptsSection      `toml:"prompts"`
 }
 
+// hasStatusConfig reports whether the section configures a case status set
+// (initial / closed / status rows), as opposed to carrying only [case.prompts].
+func (c *CaseSection) hasStatusConfig() bool {
+	return c.Initial != "" || len(c.Closed) > 0 || len(c.Status) > 0
+}
+
 // CasePromptsSection represents the [case.prompts] sub-table: workspace-
-// specific additional prompts for the case agent, keyed by lifecycle phase.
-// Only `create` (the thread-mode initialization agent) is consumed today;
-// `mention` / `close` are reserved for future phases.
+// specific additional prompts for the case agents, keyed by lifecycle phase.
+//
+//   - `create` / `create_file` feed the thread-mode initialization agent.
+//   - `mention` / `mention_file` feed the agent that answers an @mention on an
+//     existing case, in both modes: the case-channel agent in channel mode and
+//     the case-thread agent in thread mode.
+//
+// Each phase takes either the inline key or its `_file` form, never both.
+// `close` is reserved for a future phase.
 type CasePromptsSection struct {
-	Create string `toml:"create"`
+	Create      string `toml:"create"`
+	CreateFile  string `toml:"create_file"`
+	Mention     string `toml:"mention"`
+	MentionFile string `toml:"mention_file"`
+}
+
+// resolveCasePrompt determines the effective prompt of one [case.prompts]
+// phase from its inline key and its `_file` form, enforcing their exclusivity.
+// key names the inline key ("create" / "mention") for error messages.
+//
+// It follows WorkspaceAgentSection.resolvePrompt: neither set returns an empty
+// prompt, a relative file path is resolved against baseDir, and baseDir == ""
+// selects structural-validation mode, in which the file is not read and
+// deferred is returned true.
+func resolveCasePrompt(key, inline, file, baseDir string) (prompt string, deferred bool, err error) {
+	hasInline := inline != ""
+	hasFile := file != ""
+	switch {
+	case hasInline && hasFile:
+		return "", false, goerr.Wrap(ErrCasePromptConflict,
+			"[case.prompts] inline prompt and its _file form are mutually exclusive",
+			goerr.V("key", key))
+	case !hasInline && !hasFile:
+		return "", false, nil
+	case hasInline:
+		return inline, false, nil
+	}
+
+	if baseDir == "" {
+		return "", true, nil
+	}
+	path := file
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(baseDir, path)
+	}
+	// #nosec G304 -- the _file path comes from the operator-supplied config
+	// file, the same trust level as the config path itself (CLI argument).
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", false, goerr.Wrap(err, "failed to read [case.prompts] prompt file",
+			goerr.V("key", key), goerr.V("file", file))
+	}
+	content := strings.TrimRight(string(data), " \t\r\n")
+	if content == "" {
+		return "", false, goerr.Wrap(ErrCasePromptEmpty, "[case.prompts] prompt file is empty",
+			goerr.V("key", key), goerr.V("file", file))
+	}
+	return content, false, nil
+}
+
+// resolve returns the effective create and mention prompts. baseDir == ""
+// selects structural-validation mode (see resolveCasePrompt).
+func (s CasePromptsSection) resolve(baseDir string) (create, mention string, err error) {
+	create, _, err = resolveCasePrompt("create", s.Create, s.CreateFile, baseDir)
+	if err != nil {
+		return "", "", err
+	}
+	mention, _, err = resolveCasePrompt("mention", s.Mention, s.MentionFile, baseDir)
+	if err != nil {
+		return "", "", err
+	}
+	return create, mention, nil
 }
 
 // CompileSection represents the [compile] section in a TOML config
@@ -313,7 +386,11 @@ type WorkspaceConfig struct {
 	Language i18n.Lang
 	// CaseCreatePrompt is the workspace-specific additional prompt for the
 	// thread-mode case initialization agent, from [case.prompts].create.
-	CaseCreatePrompt    string
+	CaseCreatePrompt string
+	// CaseMentionPrompt is the workspace-specific additional prompt for the
+	// agent that answers an @mention on an existing case (both modes), from
+	// [case.prompts].mention.
+	CaseMentionPrompt   string
 	Jobs                []*model.Job
 	CaseMode            model.CaseMode
 	CaseTrigger         model.CaseTrigger
@@ -571,6 +648,13 @@ func (a *AppConfig) Validate() error {
 		return err
 	}
 
+	// [case.prompts] inline / _file exclusivity, checked without reading files.
+	if a.Case != nil {
+		if _, _, err := a.Case.Prompts.resolve(""); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -673,7 +757,9 @@ func (a *AppConfig) validateCaseMode() error {
 // Returns nil (no error) when [case] is omitted; callers requiring a set must
 // check for thread mode separately.
 func (a *AppConfig) resolveCaseStatusSet() (*model.ActionStatusSet, error) {
-	if a.Case == nil {
+	// A [case] section that carries only [case.prompts] (a channel-mode
+	// workspace setting `mention`) defines no status set.
+	if a.Case == nil || len(a.Case.Status) == 0 {
 		return nil, nil
 	}
 	defs := make([]model.ActionStatusDefinition, 0, len(a.Case.Status))
@@ -968,14 +1054,23 @@ func parseWorkspaceConfig(src WorkspaceConfigSource) (*WorkspaceConfig, error) {
 		return nil, goerr.Wrap(err, "failed to resolve case status set", goerr.V(ConfigPathKey, path))
 	}
 
-	caseCreatePrompt := ""
+	caseCreatePrompt, caseMentionPrompt := "", ""
 	if appCfg.Case != nil {
-		caseCreatePrompt = appCfg.Case.Prompts.Create
+		caseCreatePrompt, caseMentionPrompt, err = appCfg.Case.Prompts.resolve(baseDir)
+		if err != nil {
+			return nil, goerr.Wrap(err, "failed to resolve [case.prompts]", goerr.V(ConfigPathKey, path))
+		}
 	}
 	if len(caseCreatePrompt) > model.AgentAdditionalPromptMaxLen {
 		return nil, goerr.New("[case.prompts].create exceeds the maximum length",
 			goerr.V(ConfigPathKey, path),
 			goerr.V("len", len(caseCreatePrompt)),
+			goerr.V("max", model.AgentAdditionalPromptMaxLen))
+	}
+	if len(caseMentionPrompt) > model.AgentAdditionalPromptMaxLen {
+		return nil, goerr.New("[case.prompts].mention exceeds the maximum length",
+			goerr.V(ConfigPathKey, path),
+			goerr.V("len", len(caseMentionPrompt)),
 			goerr.V("max", model.AgentAdditionalPromptMaxLen))
 	}
 
@@ -1008,8 +1103,12 @@ func parseWorkspaceConfig(src WorkspaceConfigSource) (*WorkspaceConfig, error) {
 				"workspace_id", wsID, "config_path", path)
 		}
 	} else {
-		if appCfg.Case != nil {
+		if appCfg.Case != nil && appCfg.Case.hasStatusConfig() {
 			logging.Default().Warn("channel-mode workspace ignores [case.status]",
+				"workspace_id", wsID, "config_path", path)
+		}
+		if caseCreatePrompt != "" {
+			logging.Default().Warn("channel-mode workspace ignores [case.prompts] create",
 				"workspace_id", wsID, "config_path", path)
 		}
 		if appCfg.Slack.Trigger != "" {
@@ -1038,6 +1137,7 @@ func parseWorkspaceConfig(src WorkspaceConfigSource) (*WorkspaceConfig, error) {
 		AssistLanguage:       appCfg.Assist.Language,
 		Language:             i18n.Lang(appCfg.Workspace.Language),
 		CaseCreatePrompt:     caseCreatePrompt,
+		CaseMentionPrompt:    caseMentionPrompt,
 		Jobs:                 jobs,
 		CaseMode:             caseMode,
 		CaseTrigger:          caseTrigger,
@@ -1126,6 +1226,7 @@ func BuildWorkspaceRegistry(workspaceConfigs []*WorkspaceConfig) *model.Workspac
 			AssistLanguage:          wc.AssistLanguage,
 			Language:                wc.Language,
 			CaseCreatePrompt:        wc.CaseCreatePrompt,
+			CaseMentionPrompt:       wc.CaseMentionPrompt,
 			Jobs:                    wc.Jobs,
 			CaseMode:                wc.CaseMode,
 			CaseTrigger:             wc.CaseTrigger,
