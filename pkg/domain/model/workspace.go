@@ -61,6 +61,10 @@ type WorkspaceEntry struct {
 	// every channel-root post) or mention (only an @mention of the bot). Only
 	// meaningful when CaseMode is thread.
 	CaseTrigger CaseTrigger
+	// CaseSummary selects how the Slack "created a case" summary is rendered in
+	// thread mode: full (default) or a single linked line. Only meaningful when
+	// CaseMode is thread.
+	CaseSummary CaseSummaryStyle
 	// SlackMonitorChannelID is the channel watched for thread-mode case
 	// creation. Required (and only meaningful) when CaseMode is thread.
 	SlackMonitorChannelID string

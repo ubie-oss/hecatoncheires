@@ -34,9 +34,12 @@ var (
 	ErrInvalidWorkspaceLanguage = goerr.New("invalid workspace language")
 	ErrInvalidCaseMode          = goerr.New("invalid case mode")
 	ErrInvalidCaseTrigger       = goerr.New("invalid case trigger")
-	ErrMissingMonitorChannel    = goerr.New("thread mode requires [slack] channel")
-	ErrInvalidMonitorChannel    = goerr.New("invalid Slack channel ID")
-	ErrMissingCaseStatus        = goerr.New("thread mode requires [case.status]")
+	// ErrInvalidCaseSummary is returned when [slack] case_summary is not one of
+	// "full" or "link".
+	ErrInvalidCaseSummary    = goerr.New("invalid case summary style")
+	ErrMissingMonitorChannel = goerr.New("thread mode requires [slack] channel")
+	ErrInvalidMonitorChannel = goerr.New("invalid Slack channel ID")
+	ErrMissingCaseStatus     = goerr.New("thread mode requires [case.status]")
 	// ErrReactionRequiresThreadMode is returned when [slack] reaction is set on a
 	// workspace that is not in thread mode. Reaction-triggered case creation needs
 	// a destination thread, which only thread mode provides.

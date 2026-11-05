@@ -713,6 +713,7 @@ description = "Security risks"
 [slack]
 mode = "thread"
 channel = "C123"
+case_summary = "link"
 
 [case]
 initial = "TRIAGE"
@@ -745,6 +746,7 @@ type = "text"
 	gt.Value(t, entry.Workspace.Description).Equal("Security risks")
 	gt.Bool(t, entry.IsThreadMode()).True()
 	gt.Value(t, entry.SlackMonitorChannelID).Equal("C123")
+	gt.Value(t, entry.CaseSummary).Equal(model.CaseSummaryLink)
 	gt.Value(t, entry.FieldSchema).NotNil().Required()
 	gt.Array(t, entry.FieldSchema.Fields).Length(1).Required()
 	gt.Value(t, entry.FieldSchema.Fields[0].ID).Equal("category")
@@ -1656,6 +1658,8 @@ type = "text"
 		gt.Value(t, configs[0].AcceptBot).Equal(false)
 		// trigger defaults to instant when omitted.
 		gt.Value(t, configs[0].CaseTrigger).Equal(model.CaseTriggerInstant)
+		// case_summary defaults to full when omitted.
+		gt.Value(t, configs[0].CaseSummary).Equal(model.CaseSummaryFull)
 	})
 
 	t.Run("thread mode selects mention trigger", func(t *testing.T) {
@@ -1710,6 +1714,44 @@ initial = "TRIAGE"
 `)
 		gt.Error(t, err).Required()
 		gt.Bool(t, errors.Is(err, config.ErrInvalidCaseTrigger)).True()
+	})
+
+	threadWithCaseSummary := func(style string) string {
+		return `
+[workspace]
+id = "support"
+
+[slack]
+mode = "thread"
+channel = "C0123ABC"
+case_summary = "` + style + `"
+
+[case]
+initial = "TRIAGE"
+  [[case.status]]
+  id = "TRIAGE"
+  name = "Triage"
+`
+	}
+
+	t.Run("thread mode selects the link case summary", func(t *testing.T) {
+		configs, err := writeAndLoad(t, threadWithCaseSummary("link"))
+		gt.NoError(t, err).Required()
+		gt.Array(t, configs).Length(1).Required()
+		gt.Value(t, configs[0].CaseSummary).Equal(model.CaseSummaryLink)
+	})
+
+	t.Run("thread mode accepts an explicit full case summary", func(t *testing.T) {
+		configs, err := writeAndLoad(t, threadWithCaseSummary("full"))
+		gt.NoError(t, err).Required()
+		gt.Array(t, configs).Length(1).Required()
+		gt.Value(t, configs[0].CaseSummary).Equal(model.CaseSummaryFull)
+	})
+
+	t.Run("invalid case summary is rejected", func(t *testing.T) {
+		_, err := writeAndLoad(t, threadWithCaseSummary("compact"))
+		gt.Error(t, err).Required()
+		gt.Bool(t, errors.Is(err, config.ErrInvalidCaseSummary)).True()
 	})
 
 	threadWithReaction := func(reaction string) string {

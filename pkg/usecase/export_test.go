@@ -152,6 +152,10 @@ var BuildWelcomeFieldsForTest = buildWelcomeFields
 // lines.
 var RenderSummaryFieldsForTest = renderSummaryFields
 
+// BuildThreadCaseSummaryBlocksForTest exposes the thread-mode create summary
+// builder.
+var BuildThreadCaseSummaryBlocksForTest = buildThreadCaseSummaryBlocks
+
 // BuildFieldPairSectionsForTest exposes the mention draft preview's field
 // section builder.
 var BuildFieldPairSectionsForTest = buildFieldPairSections

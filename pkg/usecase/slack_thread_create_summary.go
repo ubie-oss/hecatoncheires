@@ -51,12 +51,22 @@ func replaceRootWithCaseSummary(ctx context.Context, svc slack.Service, entry *m
 }
 
 // buildThreadCaseSummaryBlocks renders the Block Kit summary posted to the
-// thread once the initialization (create) agent commits a new case. It shows
-// the title, description, the populated custom fields (resolved to option
-// names), the board status, and a web-UI link. The fallback string is used by
-// Slack clients that cannot render blocks.
+// thread once the initialization (create) agent commits a new case. By default
+// it shows the title, description, the populated custom fields (resolved to
+// option names), the board status, and a web-UI link; a workspace with
+// [slack] case_summary = "link" gets a single linked line instead. The
+// fallback string is used by Slack clients that cannot render blocks.
 func buildThreadCaseSummaryBlocks(ctx context.Context, c *model.Case, entry *model.WorkspaceEntry, url string) ([]goslack.Block, string) {
 	header := i18n.T(ctx, i18n.MsgThreadCaseSummaryHeader)
+	fallback := header + " — " + orDash(c.Title)
+	if url != "" {
+		fallback += " " + url
+	}
+
+	if entry != nil && entry.CaseSummary.IsLink() {
+		return []goslack.Block{buildThreadCaseSummaryLinkBlock(ctx, c, header, url)}, fallback
+	}
+
 	titleLabel := i18n.T(ctx, i18n.MsgThreadCaseSummaryTitle)
 	descLabel := i18n.T(ctx, i18n.MsgThreadCaseSummaryDesc)
 	statusLabel := i18n.T(ctx, i18n.MsgThreadCaseSummaryStatus)
@@ -87,11 +97,23 @@ func buildThreadCaseSummaryBlocks(ctx context.Context, c *model.Case, entry *mod
 			goslack.NewTextBlockObject(goslack.MarkdownType, i18n.T(ctx, i18n.MsgThreadCaseSummaryLink, url), false, false)))
 	}
 
-	fallback := header + " — " + orDash(c.Title)
-	if url != "" {
-		fallback += " " + url
-	}
 	return blocks, fallback
+}
+
+// buildThreadCaseSummaryLinkBlock renders the one-line summary: the header
+// followed by the case title linked to the web UI, or the bare title when no
+// base URL is configured. The title is escaped so it cannot break the mrkdwn
+// link syntax.
+func buildThreadCaseSummaryLinkBlock(ctx context.Context, c *model.Case, header, url string) goslack.Block {
+	title := escapeSlackLinkLabel(orDash(c.Title))
+	var line string
+	if url != "" {
+		line = i18n.T(ctx, i18n.MsgThreadCaseSummaryLine, header, url, title)
+	} else {
+		line = i18n.T(ctx, i18n.MsgThreadCaseSummaryLineNoLink, header, title)
+	}
+	return goslack.NewSectionBlock(
+		goslack.NewTextBlockObject(goslack.MarkdownType, line, false, false), nil, nil)
 }
 
 // renderSummaryFields turns the case's populated custom fields into
