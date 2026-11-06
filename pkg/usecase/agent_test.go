@@ -578,6 +578,79 @@ func TestAgentUseCase_HandleAgentMention(t *testing.T) {
 		gt.Value(t, events[1].Sequence).Equal(int64(2))
 	})
 
+	// A Slack workflow or another app posts its mention with no user id. It used
+	// to be refused before the turn was spawned, so the thread got an internal
+	// error instead of an answer. It must be answered, acting as the case
+	// channel (which may read even a private case bound to that channel).
+	t.Run("responds to a mention posted by an app with no user", func(t *testing.T) {
+		repo := memory.New()
+		ctx := context.Background()
+
+		created, err := repo.Case().Create(ctx, "ws-test", &model.Case{
+			ReporterID:     "U-TEST-DEFAULT",
+			Title:          "Sample case 1",
+			Description:    "A private sample case",
+			Status:         types.CaseStatusOpen,
+			SlackChannelID: "C-AGENT-APP",
+			IsPrivate:      true,
+			ChannelUserIDs: []string{"U-TEST-DEFAULT"},
+		})
+		gt.NoError(t, err).Required()
+
+		registry := model.NewWorkspaceRegistry()
+		registry.Register(&model.WorkspaceEntry{
+			Workspace: model.Workspace{ID: "ws-test", Name: "Test"},
+		})
+
+		slackMock := &agentTestSlackService{}
+		slackMock.getConversationHistoryFn = func(ctx context.Context, channelID string, oldest time.Time, limit int) ([]slack.ConversationMessage, error) {
+			return []slack.ConversationMessage{
+				{Text: "@bot please review this request", Timestamp: "1234567890.000020"},
+			}, nil
+		}
+
+		llmClient := &mockLLMClient{}
+
+		agentUC := usecase.NewAgentUseCase(usecase.AgentDeps{
+			Repo:         repo,
+			Registry:     registry,
+			LLM:          llmClient,
+			EmbedClient:  llmClient,
+			HistoryRepo:  agentarchive.NewMemoryHistoryRepository(),
+			TraceRepo:    agentarchive.NewMemoryTraceRepository(),
+			SlackService: slackMock,
+		})
+		startAgentRuntime(t, agentRuntimeDeps{
+			UC: agentUC, Repo: repo, Registry: registry, LLM: llmClient,
+		})
+
+		msg := slackmodel.NewMessageFromData(
+			"1234567890.000020",
+			"C-AGENT-APP",
+			"",
+			"T123",
+			"", // an app-authored post names no user
+			"",
+			"@bot please review this request",
+			"1234567890.000020",
+			time.Now(),
+			nil,
+		)
+
+		gt.NoError(t, agentUC.HandleAgentMention(ctx, msg)).Required()
+
+		posts := waitForPosts(t, slackMock, 2)
+		gt.Array(t, posts).Length(2).Required()
+		gt.Value(t, posts[0].ChannelID).Equal("C-AGENT-APP")
+		gt.Value(t, posts[1].ChannelID).Equal("C-AGENT-APP")
+		gt.Value(t, posts[1].Text).Equal("This is a test response from the AI agent.")
+
+		// The run was recorded against the case, so it really ran.
+		runs, err := repo.JobRun().ListByCase(ctx, "ws-test", created.ID)
+		gt.NoError(t, err).Required()
+		gt.Array(t, runs).Length(1)
+	})
+
 	t.Run("responds to mention in thread", func(t *testing.T) {
 		repo := memory.New()
 		ctx := context.Background()

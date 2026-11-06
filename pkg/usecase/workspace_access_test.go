@@ -126,6 +126,26 @@ func TestWorkspaceAccess_NoPolicyAnywhereFilterKeepsAll(t *testing.T) {
 	gt.Value(t, users.calls.Load()).Equal(int32(0))
 }
 
+// A case-channel actor is what an agent turn started by an app acts as. It is
+// not a person, so the workspace policy — which is about people — is not asked,
+// matching how bot-authored events are not checked.
+func TestWorkspaceAccess_CaseChannelActorIsNotChecked(t *testing.T) {
+	f := newAccessFixture(t, time.Minute, map[string]string{"secured": policyDenyAll}, "secured")
+	ctx := context.Background()
+	actor := model.CaseChannelActorID("C0CASE01")
+
+	gt.NoError(t, f.uc.Authorize(ctx, "secured", actor))
+	gt.NoError(t, f.uc.AuthorizeCurrentUser(auth.ContextWithToken(ctx, &auth.Token{Sub: actor}), "secured"))
+	got, err := f.uc.FilterAccessible(ctx, f.reg.List(), actor)
+	gt.NoError(t, err).Required()
+	gt.Array(t, got).Length(1).Required()
+	gt.Value(t, got[0].Workspace.ID).Equal("secured")
+	gt.Value(t, f.users.calls.Load()).Equal(int32(0))
+
+	// A person is still checked.
+	gt.Error(t, f.uc.Authorize(ctx, "secured", "U1")).Is(model.ErrWorkspaceAccessDenied)
+}
+
 func TestWorkspaceAccess_AllowValues(t *testing.T) {
 	f := newAccessFixture(t, time.Minute, map[string]string{
 		"allow": policyAllowAll,

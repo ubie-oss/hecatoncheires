@@ -229,6 +229,57 @@ func TestCaseMultiActionAdapter_UpdateAction_AttributesToSlackUser(t *testing.T)
 	gt.Bool(t, foundStatusChanged).True()
 }
 
+// A turn an app started acts as the case channel. Its writes must go through
+// (the channel actor may reach its own case, even a private one) and be
+// recorded as the system's, never as a user id that is not a person.
+func TestCaseMultiActionAdapter_CaseChannelActorIsAttributedToTheSystem(t *testing.T) {
+	f := newCasemultiActionFixture(t)
+
+	stored, err := f.repo.Case().Get(context.Background(), testWorkspaceID, f.caseID)
+	gt.NoError(t, err).Required()
+	stored.IsPrivate = true
+	stored.SlackChannelID = "C0CASE01"
+	stored.ChannelUserIDs = []string{"U-CREATOR"}
+	_, err = f.repo.Case().Update(context.Background(), testWorkspaceID, stored)
+	gt.NoError(t, err).Required()
+
+	actorID := model.CaseChannelActorID("C0CASE01")
+	ctx := auth.ContextWithToken(context.Background(), &auth.Token{Sub: actorID})
+
+	newTitle := "Updated by an app-started turn"
+	updated, err := f.adapter.UpdateAction(ctx, testWorkspaceID, f.actionID, casemulti.ActionUpdate{Title: &newTitle}, actorID)
+	gt.NoError(t, err).Required()
+	gt.Value(t, updated.Title).Equal(newTitle)
+
+	events, _, err := f.repo.ActionEvent().List(ctx, testWorkspaceID, f.actionID, 10, "")
+	gt.NoError(t, err).Required()
+	found := false
+	for _, ev := range events {
+		if ev.Kind == types.ActionEventTitleChanged {
+			found = true
+			gt.Value(t, ev.ActorID).Equal("")
+		}
+	}
+	gt.Bool(t, found).True()
+
+	step, err := f.adapter.AddActionStep(ctx, testWorkspaceID, f.actionID, "Follow up", actorID)
+	gt.NoError(t, err).Required()
+	gt.Value(t, step.CreatedBy).Equal("")
+
+	created, err := f.adapter.CreateAction(ctx, testWorkspaceID, f.caseID, "Created by an app-started turn", "")
+	gt.NoError(t, err).Required()
+	createdEvents, _, err := f.repo.ActionEvent().List(ctx, testWorkspaceID, created.ID, 10, "")
+	gt.NoError(t, err).Required()
+	gt.Array(t, createdEvents).Length(1).Required()
+	gt.Value(t, createdEvents[0].Kind).Equal(types.ActionEventCreated)
+	gt.Value(t, createdEvents[0].ActorID).Equal("")
+
+	// Another channel's actor is still refused on the private case.
+	otherCtx := auth.ContextWithToken(context.Background(), &auth.Token{Sub: model.CaseChannelActorID("C0OTHER9")})
+	_, err = f.adapter.UpdateAction(otherCtx, testWorkspaceID, f.actionID, casemulti.ActionUpdate{Title: &newTitle}, model.CaseChannelActorID("C0OTHER9"))
+	gt.Error(t, err).Is(usecase.ErrAccessDenied)
+}
+
 // TestCaseMultiActionAdapter_AddActionStep verifies the step is persisted and
 // the actorID is recorded as the creator (ActionStep.CreatedBy), mirroring
 // actionIdentifier's SlackUser-actor path.

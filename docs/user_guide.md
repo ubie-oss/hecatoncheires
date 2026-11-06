@@ -1021,6 +1021,17 @@ agent validates the values before saving: unknown fields, invalid option ids,
 and assignees / user fields that are not known Slack users are refused with an
 explanation rather than written.
 
+The agent acts with the access of the person who mentioned it, so it cannot
+read a private Case that person is not a channel member of. A mention posted
+by an app rather than a person — a Slack Workflow step, an integration bot —
+names no Slack user. In a channel-mode Case channel such a mention is still
+answered, and the agent then acts as **the Case channel itself**: it may read
+and change the Case bound to that channel (even a private one, since its reply
+lands in front of that channel's members) and any public Case, but no other
+private Case. Changes it makes are attributed to the system rather than to a
+user. Workspace `[authz]` policies are not evaluated for such a mention, the
+same as for other bot-authored events.
+
 Two turns never run concurrently on the same thread: every turn is spawned on
 the agent runtime under the thread's subject, and the runtime admits one live
 run per subject.

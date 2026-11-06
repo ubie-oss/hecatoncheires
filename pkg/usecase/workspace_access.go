@@ -92,6 +92,14 @@ func (uc *WorkspaceAccessUseCase) Authorize(ctx context.Context, workspaceID, sl
 		return goerr.Wrap(model.ErrWorkspaceAccessDenied, "workspace access requires a Slack user",
 			goerr.V("workspace_id", workspaceID))
 	}
+	// A case-channel actor runs an agent turn an app (a Slack workflow, an
+	// integration bot) started in a case channel. Bot-authored events are not
+	// checked against the policy (eventActorAllowed), and this actor is how such
+	// a turn carries on; evaluating it would ask the policy about a "user" that
+	// does not exist.
+	if model.IsCaseChannelActor(slackUserID) {
+		return nil
+	}
 	decisions, err := uc.decisionsFor(ctx, slackUserID)
 	if err != nil {
 		return goerr.Wrap(err, "decide workspace access",

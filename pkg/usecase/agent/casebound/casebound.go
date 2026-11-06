@@ -98,9 +98,14 @@ type TurnRequest struct {
 	MentionText string
 	// MentionUserID is the Slack user who mentioned the bot. It becomes the
 	// access actor for the whole run, so tools see exactly what that person may
-	// see. A turn without it is refused: a run with no actor is read by the
-	// usecase layer as a system context and would bypass private-case access
-	// control entirely.
+	// see.
+	//
+	// It is empty when an app — a Slack workflow, an integration bot — posted
+	// the mention, because such a post names no Slack user. The run then acts as
+	// the case channel itself (model.CaseChannelActorID): it may reach this case
+	// and public cases, and no other private case. It never runs with no actor
+	// at all: a run with no actor is read by the usecase layer as a system
+	// context and would bypass private-case access control entirely.
 	MentionUserID string
 	BotUserID     string
 
@@ -223,7 +228,7 @@ func (uc *UseCase) scope(ctx context.Context, req TurnRequest) agentkernel.Scope
 		ChannelID:   req.ChannelID,
 		ThreadTS:    req.ThreadTS,
 		SessionID:   req.Session.ID,
-		ActorUserID: req.MentionUserID,
+		ActorUserID: actorOf(&req),
 		Lang:        string(i18n.LangFromContext(ctx)),
 		// The channel-mode case agent runs one ReAct loop and is handed its
 		// whole palette at once; there is no planner to choose a subset.
@@ -392,16 +397,38 @@ func validateRequest(req *TurnRequest) error {
 	if req.TriggerTS == "" {
 		return goerr.New("TriggerTS is required")
 	}
-	if req.MentionUserID == "" {
-		return goerr.New("MentionUserID is required (it is the access actor for the run)")
-	}
 	if req.Case == nil {
 		return goerr.New("Case is required")
 	}
 	if req.Workspace == nil {
 		return goerr.New("Workspace is required")
 	}
+	if actorOf(req) == "" {
+		return goerr.New("the turn has no access actor: no mentioning user, and the mention was not posted in the case's own channel",
+			goerr.V("channel_id", req.ChannelID),
+			goerr.V("case_channel_id", req.Case.SlackChannelID))
+	}
 	return nil
+}
+
+// actorOf returns the access actor the run acts under, or "" when there is
+// none it may use.
+//
+// A mention by a person acts as that person. A mention an app posted names no
+// person, and acts as the case channel instead — but only when it was posted in
+// the channel this case owns: that actor may read and change the case, and is
+// justified only because the reply lands in front of the members who can
+// already see it. A thread-mode case does not own its channel (every case of
+// the workspace shares it), so it never qualifies.
+func actorOf(req *TurnRequest) string {
+	if req.MentionUserID != "" {
+		return req.MentionUserID
+	}
+	c := req.Case
+	if c == nil || c.SlackChannelID == "" || c.SlackThreadTS != "" || c.SlackChannelID != req.ChannelID {
+		return ""
+	}
+	return model.CaseChannelActorID(c.SlackChannelID)
 }
 
 // buildUserInput assembles the user-facing text handed to the agent. Unprocessed

@@ -80,6 +80,9 @@ func RegisterTaskAgent(reg *agentkit.Registry, limiter agentkit.Limiter,
 // schedule with nobody behind them, so there is no actor to name and their
 // system-context access is the intended one. A sub-agent inherits its parent's
 // metadata, so it carries whatever actor the parent was given.
+// An actor need not be a person. A channel-mode case-channel turn that an app
+// started (a Slack workflow's mention names no user) acts as the case channel
+// (model.CaseChannelActorID), which reaches that one case and public cases only.
 // AgentCaseThreadCreate is the scoped exception. A thread-mode case may be
 // raised by an integration bot's intake post that names no human, so demanding an
 // actor there would refuse a legitimate creation — the same relaxation

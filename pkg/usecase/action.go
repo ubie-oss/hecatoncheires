@@ -231,10 +231,7 @@ func (uc *ActionUseCase) CreateAction(ctx context.Context, workspaceID string, c
 
 	// Record the creation event so the WebUI activity feed can show
 	// "X created this action" alongside subsequent edits.
-	creator := ""
-	if token, tokenErr := auth.TokenFromContext(ctx); tokenErr == nil {
-		creator = token.Sub
-	}
+	creator := tokenUserID(ctx)
 	if err := uc.repo.ActionEvent().Put(ctx, workspaceID, created.ID, &model.ActionEvent{
 		ID:        uuid.NewString(),
 		ActionID:  created.ID,
