@@ -457,7 +457,11 @@ func TestValidateRequestRequiresAnActor(t *testing.T) {
 		MentionTS: "1700000006.000001",
 		TriggerTS: "1700000006.000001",
 		Case:      &model.Case{ID: 1, SlackChannelID: testChannelID},
-		Workspace: &model.WorkspaceEntry{Workspace: model.Workspace{ID: "ws-1"}},
+		Workspace: &model.WorkspaceEntry{
+			Workspace:     model.Workspace{ID: "ws-1"},
+			MentionBotIDs: []string{"B0LISTED1"},
+		},
+		MentionBotID: "B0LISTED1",
 	}
 
 	t.Run("a mention by a user is accepted", func(t *testing.T) {
@@ -471,6 +475,19 @@ func TestValidateRequestRequiresAnActor(t *testing.T) {
 		req := base
 		gt.NoError(t, casebound.ValidateRequestForTest(&req))
 		gt.Value(t, casebound.ActorOfForTest(&req)).Equal(model.CaseChannelActorID("ws-1", testChannelID))
+	})
+
+	t.Run("an app not listed in mention_bots is refused", func(t *testing.T) {
+		req := base
+		req.MentionBotID = "B0UNLISTED"
+		gt.Error(t, casebound.ValidateRequestForTest(&req))
+		gt.Value(t, casebound.ActorOfForTest(&req)).Equal("")
+	})
+
+	t.Run("a mention with neither a user nor a bot id is refused", func(t *testing.T) {
+		req := base
+		req.MentionBotID = ""
+		gt.Error(t, casebound.ValidateRequestForTest(&req))
 	})
 
 	t.Run("an app mention outside the case's channel is refused", func(t *testing.T) {
@@ -504,6 +521,8 @@ func TestStartTurnAnswersAMentionPostedByAnApp(t *testing.T) {
 
 	req := h.request(ssn, "1700000008.000001")
 	req.MentionUserID = ""
+	req.MentionBotID = "B0LISTED1"
+	req.Workspace.MentionBotIDs = []string{"B0LISTED1"}
 	res, err := h.uc.StartTurn(ctx, req)
 	gt.NoError(t, err).Required()
 	gt.Value(t, res.Status).Equal(casebound.StatusStarted)

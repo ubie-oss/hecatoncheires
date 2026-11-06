@@ -1024,8 +1024,10 @@ explanation rather than written.
 The agent acts with the access of the person who mentioned it, so it cannot
 read a private Case that person is not a channel member of. A mention posted
 by an app rather than a person — a Slack Workflow step, an integration bot —
-names no Slack user. In a channel-mode Case channel such a mention is still
-answered, and the agent then acts as **the Case channel itself**: it may read
+names no Slack user. In a channel-mode Case channel such a mention is
+answered only when the workspace lists the app's bot id in `[slack]
+mention_bots` (see [configuration.md](configuration.md)); a mention from any
+other app is ignored. The agent then acts as **the Case channel itself**: it may read
 and change the Case bound to that channel (even a private one, since its reply
 lands in front of that channel's members) and any public Case, but no other
 private Case. Changes it makes are attributed to the system rather than to a

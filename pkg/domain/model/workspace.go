@@ -1,6 +1,8 @@
 package model
 
 import (
+	"slices"
+
 	"github.com/m-mizutani/goerr/v2"
 	"github.com/m-mizutani/hecatoncheires/pkg/domain/model/config"
 	"github.com/m-mizutani/hecatoncheires/pkg/i18n"
@@ -98,6 +100,22 @@ type WorkspaceEntry struct {
 	// channel instead of creating one ([slack] allow_existing_channel).
 	// Channel mode only; always false for a thread-mode workspace.
 	AllowExistingSlackChannel bool
+	// MentionBotIDs are the Slack bot ids ([slack] mention_bots) of the apps —
+	// a Slack workflow, an integration bot — whose @mention in a case channel is
+	// answered. Such a mention names no Slack user, so the turn acts as the case
+	// channel (CaseChannelActorID) and may change that case; only an app listed
+	// here may start one. Channel mode only; always empty for a thread-mode
+	// workspace.
+	MentionBotIDs []string
+}
+
+// AllowsMentionBot reports whether an @mention posted by the app with Slack
+// bot id botID may start a case-channel agent turn in this workspace.
+func (e *WorkspaceEntry) AllowsMentionBot(botID string) bool {
+	if e == nil || botID == "" {
+		return false
+	}
+	return slices.Contains(e.MentionBotIDs, botID)
 }
 
 // IsThreadMode reports whether this workspace uses thread-per-case binding.

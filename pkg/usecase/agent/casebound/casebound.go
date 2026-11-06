@@ -107,7 +107,11 @@ type TurnRequest struct {
 	// at all: a run with no actor is read by the usecase layer as a system
 	// context and would bypass private-case access control entirely.
 	MentionUserID string
-	BotUserID     string
+	// MentionBotID is the Slack bot id of the app that posted the mention, empty
+	// for a person's. An app's mention is accepted only when the workspace lists
+	// it in [slack] mention_bots (WorkspaceEntry.AllowsMentionBot).
+	MentionBotID string
+	BotUserID    string
 
 	Workspace     *model.WorkspaceEntry
 	Case          *model.Case
@@ -404,9 +408,10 @@ func validateRequest(req *TurnRequest) error {
 		return goerr.New("Workspace is required")
 	}
 	if actorOf(req) == "" {
-		return goerr.New("the turn has no access actor: no mentioning user, and the mention was not posted in the case's own channel",
+		return goerr.New("the turn has no access actor: no mentioning user, and no listed app mentioning in the case's own channel",
 			goerr.V("channel_id", req.ChannelID),
-			goerr.V("case_channel_id", req.Case.SlackChannelID))
+			goerr.V("case_channel_id", req.Case.SlackChannelID),
+			goerr.V("bot_id", req.MentionBotID))
 	}
 	return nil
 }
@@ -415,8 +420,9 @@ func validateRequest(req *TurnRequest) error {
 // none it may use.
 //
 // A mention by a person acts as that person. A mention an app posted names no
-// person, and acts as the case channel instead — but only when it was posted in
-// the channel this case owns: that actor may read and change the case, and is
+// person, and acts as the case channel instead — but only for an app the
+// workspace lists in [slack] mention_bots, and only when it was posted in the
+// channel this case owns: that actor may read and change the case, and is
 // justified only because the reply lands in front of the members who can
 // already see it. A thread-mode case does not own its channel (every case of
 // the workspace shares it), so it never qualifies.
@@ -424,8 +430,11 @@ func actorOf(req *TurnRequest) string {
 	if req.MentionUserID != "" {
 		return req.MentionUserID
 	}
+	if !req.Workspace.AllowsMentionBot(req.MentionBotID) {
+		return ""
+	}
 	c := req.Case
-	if c == nil || req.Workspace == nil || req.Workspace.Workspace.ID == "" || c.SlackChannelID == "" || c.SlackThreadTS != "" || c.SlackChannelID != req.ChannelID {
+	if c == nil || req.Workspace.Workspace.ID == "" || c.SlackChannelID == "" || c.SlackThreadTS != "" || c.SlackChannelID != req.ChannelID {
 		return ""
 	}
 	return model.CaseChannelActorID(req.Workspace.Workspace.ID, c.SlackChannelID)
