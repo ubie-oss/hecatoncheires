@@ -73,7 +73,7 @@ func TestIsCaseAccessible(t *testing.T) {
 				SlackChannelID: "C0CASE01",
 				ChannelUserIDs: []string{"U001"},
 			},
-			userID:   model.CaseChannelActorID("C0CASE01"),
+			userID:   model.CaseChannelActorID("ws-1", "C0CASE01"),
 			expected: true,
 		},
 		{
@@ -83,7 +83,7 @@ func TestIsCaseAccessible(t *testing.T) {
 				SlackChannelID: "C0CASE01",
 				ChannelUserIDs: []string{"U001"},
 			},
-			userID:   model.CaseChannelActorID("C0OTHER9"),
+			userID:   model.CaseChannelActorID("ws-1", "C0OTHER9"),
 			expected: false,
 		},
 		{
@@ -94,7 +94,7 @@ func TestIsCaseAccessible(t *testing.T) {
 				SlackThreadTS:  "1700000000.000100",
 				ChannelUserIDs: []string{"U001"},
 			},
-			userID:   model.CaseChannelActorID("C0MONITOR"),
+			userID:   model.CaseChannelActorID("ws-1", "C0MONITOR"),
 			expected: false,
 		},
 		{
@@ -103,7 +103,7 @@ func TestIsCaseAccessible(t *testing.T) {
 				IsPrivate:      true,
 				ChannelUserIDs: []string{"U001"},
 			},
-			userID:   model.CaseChannelActorID(""),
+			userID:   "@channel:ws-1/",
 			expected: false,
 		},
 	}

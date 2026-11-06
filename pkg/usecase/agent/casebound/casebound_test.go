@@ -470,7 +470,7 @@ func TestValidateRequestRequiresAnActor(t *testing.T) {
 	t.Run("an app mention in the case's own channel acts as that channel", func(t *testing.T) {
 		req := base
 		gt.NoError(t, casebound.ValidateRequestForTest(&req))
-		gt.Value(t, casebound.ActorOfForTest(&req)).Equal(model.CaseChannelActorID(testChannelID))
+		gt.Value(t, casebound.ActorOfForTest(&req)).Equal(model.CaseChannelActorID("ws-1", testChannelID))
 	})
 
 	t.Run("an app mention outside the case's channel is refused", func(t *testing.T) {
@@ -511,7 +511,7 @@ func TestStartTurnAnswersAMentionPostedByAnApp(t *testing.T) {
 	proc := h.drive(t, res.ProcessID)
 	gt.Value(t, proc.Status).Equal(agentkit.ProcessSucceeded)
 	gt.Value(t, agentkernel.ScopeFrom(proc.Metadata).ActorUserID).
-		Equal(model.CaseChannelActorID(testChannelID))
+		Equal(model.CaseChannelActorID("ws-1", testChannelID))
 	gt.Array(t, h.host.Calls()).Length(1)
 }
 

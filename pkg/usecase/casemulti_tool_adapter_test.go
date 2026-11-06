@@ -243,7 +243,7 @@ func TestCaseMultiActionAdapter_CaseChannelActorIsAttributedToTheSystem(t *testi
 	_, err = f.repo.Case().Update(context.Background(), testWorkspaceID, stored)
 	gt.NoError(t, err).Required()
 
-	actorID := model.CaseChannelActorID("C0CASE01")
+	actorID := model.CaseChannelActorID(testWorkspaceID, "C0CASE01")
 	ctx := auth.ContextWithToken(context.Background(), &auth.Token{Sub: actorID})
 
 	newTitle := "Updated by an app-started turn"
@@ -275,8 +275,8 @@ func TestCaseMultiActionAdapter_CaseChannelActorIsAttributedToTheSystem(t *testi
 	gt.Value(t, createdEvents[0].ActorID).Equal("")
 
 	// Another channel's actor is still refused on the private case.
-	otherCtx := auth.ContextWithToken(context.Background(), &auth.Token{Sub: model.CaseChannelActorID("C0OTHER9")})
-	_, err = f.adapter.UpdateAction(otherCtx, testWorkspaceID, f.actionID, casemulti.ActionUpdate{Title: &newTitle}, model.CaseChannelActorID("C0OTHER9"))
+	otherCtx := auth.ContextWithToken(context.Background(), &auth.Token{Sub: model.CaseChannelActorID(testWorkspaceID, "C0OTHER9")})
+	_, err = f.adapter.UpdateAction(otherCtx, testWorkspaceID, f.actionID, casemulti.ActionUpdate{Title: &newTitle}, model.CaseChannelActorID(testWorkspaceID, "C0OTHER9"))
 	gt.Error(t, err).Is(usecase.ErrAccessDenied)
 }
 

@@ -248,7 +248,8 @@ func IsCaseAccessible(c *Case, userID string) bool {
 	// Only a channel-mode case owns its channel. A thread-mode case's
 	// SlackChannelID is the monitored channel every case of the workspace
 	// shares, so matching it would open all of them.
-	if c.SlackThreadTS == "" && c.SlackChannelID != "" && userID == CaseChannelActorID(c.SlackChannelID) {
+	if _, channelID, ok := ParseCaseChannelActor(userID); ok &&
+		c.SlackThreadTS == "" && c.SlackChannelID != "" && channelID == c.SlackChannelID {
 		return true
 	}
 	for _, id := range c.ChannelUserIDs {

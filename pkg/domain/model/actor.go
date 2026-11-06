@@ -1,5 +1,7 @@
 package model
 
+import "strings"
+
 // SystemActorID is the sentinel ActorUserID used when a Job's tool invokes
 // a mutation on behalf of the system (no human user). The '@' prefix ensures
 // the value never collides with Slack user IDs (which always start with 'U'
@@ -18,8 +20,13 @@ func IsSystemActor(actorUserID string) bool {
 // a Slack user ID.
 const caseChannelActorPrefix = "@channel:"
 
+// caseChannelActorSep separates the workspace id from the channel id. Neither
+// a workspace id ([a-z0-9-]) nor a Slack channel id ([CG][A-Z0-9]) can contain
+// it, so the split is unambiguous.
+const caseChannelActorSep = "/"
+
 // CaseChannelActorID returns the actor that stands for the case channel
-// channelID itself.
+// channelID of workspace workspaceID.
 //
 // It is the access actor of an agent run that an app (a Slack workflow, an
 // integration bot) started by mentioning the bot in a channel-mode case
@@ -28,14 +35,30 @@ const caseChannelActorPrefix = "@channel:"
 // control. This actor is deliberately narrow instead: it may access the case
 // bound to that channel (whatever the run writes back lands in that channel,
 // in front of the members who can already see the case) and public cases, and
-// no other private case — it is never one of a case's ChannelUserIDs.
-func CaseChannelActorID(channelID string) string {
-	return caseChannelActorPrefix + channelID
+// no other private case — it is never one of a case's ChannelUserIDs. The
+// workspace is part of it so a workspace [authz] policy can admit it to its own
+// workspace and to no other one.
+func CaseChannelActorID(workspaceID, channelID string) string {
+	return caseChannelActorPrefix + workspaceID + caseChannelActorSep + channelID
+}
+
+// ParseCaseChannelActor splits an actor built by CaseChannelActorID. ok is
+// false for any other actor, and for one missing either half.
+func ParseCaseChannelActor(actorID string) (workspaceID, channelID string, ok bool) {
+	rest, found := strings.CutPrefix(actorID, caseChannelActorPrefix)
+	if !found {
+		return "", "", false
+	}
+	workspaceID, channelID, found = strings.Cut(rest, caseChannelActorSep)
+	if !found || workspaceID == "" || channelID == "" {
+		return "", "", false
+	}
+	return workspaceID, channelID, true
 }
 
 // IsCaseChannelActor reports whether actorID is an actor built by
 // CaseChannelActorID.
 func IsCaseChannelActor(actorID string) bool {
-	return len(actorID) > len(caseChannelActorPrefix) &&
-		actorID[:len(caseChannelActorPrefix)] == caseChannelActorPrefix
+	_, _, ok := ParseCaseChannelActor(actorID)
+	return ok
 }

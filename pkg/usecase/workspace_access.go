@@ -93,12 +93,18 @@ func (uc *WorkspaceAccessUseCase) Authorize(ctx context.Context, workspaceID, sl
 			goerr.V("workspace_id", workspaceID))
 	}
 	// A case-channel actor runs an agent turn an app (a Slack workflow, an
-	// integration bot) started in a case channel. Bot-authored events are not
-	// checked against the policy (eventActorAllowed), and this actor is how such
-	// a turn carries on; evaluating it would ask the policy about a "user" that
-	// does not exist.
-	if model.IsCaseChannelActor(slackUserID) {
-		return nil
+	// integration bot) started in a case channel. The policy is about people, so
+	// it is not asked about this actor. The actor is admitted to the workspace
+	// its case belongs to — the event that started the turn was already let in
+	// there, as bot-authored events are (eventActorAllowed) — and denied every
+	// other workspace that has a policy, so a cross-workspace tool cannot use it
+	// to reach a workspace closed to the people in that channel.
+	if actorWS, _, ok := model.ParseCaseChannelActor(slackUserID); ok {
+		if actorWS == workspaceID {
+			return nil
+		}
+		return goerr.Wrap(model.ErrWorkspaceAccessDenied, "a case-channel actor may only act in its own workspace",
+			goerr.V("workspace_id", workspaceID), goerr.V("actor_workspace_id", actorWS))
 	}
 	decisions, err := uc.decisionsFor(ctx, slackUserID)
 	if err != nil {

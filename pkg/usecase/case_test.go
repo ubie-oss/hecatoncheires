@@ -5854,7 +5854,7 @@ func TestCaseUseCase_ThreadChangeNotification(t *testing.T) {
 		// An agent turn an app started acts as a case channel. It is not a
 		// person, so it must never be rendered as "<@...>".
 		appCtx := auth.ContextWithToken(context.Background(),
-			&auth.Token{Sub: model.CaseChannelActorID("C0CASE01")})
+			&auth.Token{Sub: model.CaseChannelActorID("support", "C0CASE01")})
 		_, _, err := uc.UpdateCaseStatus(appCtx, "support", c.ID, "done")
 		gt.NoError(t, err).Required()
 

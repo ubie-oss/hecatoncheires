@@ -425,10 +425,10 @@ func actorOf(req *TurnRequest) string {
 		return req.MentionUserID
 	}
 	c := req.Case
-	if c == nil || c.SlackChannelID == "" || c.SlackThreadTS != "" || c.SlackChannelID != req.ChannelID {
+	if c == nil || req.Workspace == nil || req.Workspace.Workspace.ID == "" || c.SlackChannelID == "" || c.SlackThreadTS != "" || c.SlackChannelID != req.ChannelID {
 		return ""
 	}
-	return model.CaseChannelActorID(c.SlackChannelID)
+	return model.CaseChannelActorID(req.Workspace.Workspace.ID, c.SlackChannelID)
 }
 
 // buildUserInput assembles the user-facing text handed to the agent. Unprocessed
