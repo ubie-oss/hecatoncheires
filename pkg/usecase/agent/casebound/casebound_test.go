@@ -448,19 +448,90 @@ func TestNewRejectsMissingDependencies(t *testing.T) {
 // validateRequest is the gate that keeps an actor-less run from being spawned.
 // A context with no actor is read by the usecase layer as a system context and
 // BYPASSES private-case access control, so this must be a refusal, not a
-// degraded run.
+// degraded run. A mention an app posted names no user, and is accepted only
+// where it can act as the case's own channel.
 func TestValidateRequestRequiresAnActor(t *testing.T) {
-	req := casebound.TurnRequest{
+	base := casebound.TurnRequest{
 		Session:   &model.Session{ID: "s-1", ChannelID: testChannelID, ThreadTS: testThreadTS},
+		ChannelID: testChannelID,
 		MentionTS: "1700000006.000001",
 		TriggerTS: "1700000006.000001",
-		Case:      &model.Case{ID: 1},
-		Workspace: &model.WorkspaceEntry{Workspace: model.Workspace{ID: "ws-1"}},
+		Case:      &model.Case{ID: 1, SlackChannelID: testChannelID},
+		Workspace: &model.WorkspaceEntry{
+			Workspace:     model.Workspace{ID: "ws-1"},
+			MentionBotIDs: []string{"B0LISTED1"},
+		},
+		MentionBotID: "B0LISTED1",
 	}
-	gt.Error(t, casebound.ValidateRequestForTest(&req))
 
-	req.MentionUserID = "U-HUMAN"
-	gt.NoError(t, casebound.ValidateRequestForTest(&req))
+	t.Run("a mention by a user is accepted", func(t *testing.T) {
+		req := base
+		req.MentionUserID = "U-HUMAN"
+		gt.NoError(t, casebound.ValidateRequestForTest(&req))
+		gt.Value(t, casebound.ActorOfForTest(&req)).Equal("U-HUMAN")
+	})
+
+	t.Run("an app mention in the case's own channel acts as that channel", func(t *testing.T) {
+		req := base
+		gt.NoError(t, casebound.ValidateRequestForTest(&req))
+		gt.Value(t, casebound.ActorOfForTest(&req)).Equal(model.CaseChannelActorID("ws-1", testChannelID))
+	})
+
+	t.Run("an app not listed in mention_bots is refused", func(t *testing.T) {
+		req := base
+		req.MentionBotID = "B0UNLISTED"
+		gt.Error(t, casebound.ValidateRequestForTest(&req))
+		gt.Value(t, casebound.ActorOfForTest(&req)).Equal("")
+	})
+
+	t.Run("a mention with neither a user nor a bot id is refused", func(t *testing.T) {
+		req := base
+		req.MentionBotID = ""
+		gt.Error(t, casebound.ValidateRequestForTest(&req))
+	})
+
+	t.Run("an app mention outside the case's channel is refused", func(t *testing.T) {
+		req := base
+		req.ChannelID = "C-ELSEWHERE"
+		gt.Error(t, casebound.ValidateRequestForTest(&req))
+	})
+
+	t.Run("an app mention on a case with no channel is refused", func(t *testing.T) {
+		req := base
+		req.Case = &model.Case{ID: 1}
+		gt.Error(t, casebound.ValidateRequestForTest(&req))
+	})
+
+	t.Run("an app mention on a thread-mode case is refused", func(t *testing.T) {
+		req := base
+		req.Case = &model.Case{ID: 1, SlackChannelID: testChannelID, SlackThreadTS: testThreadTS}
+		gt.Error(t, casebound.ValidateRequestForTest(&req))
+	})
+}
+
+// An app-posted mention (a Slack workflow) used to be refused before it was
+// spawned, so the thread got an internal error instead of an answer. It must
+// run, answer in the thread, and act as the case channel rather than as nobody.
+func TestStartTurnAnswersAMentionPostedByAnApp(t *testing.T) {
+	ctx := context.Background()
+	h := newHarness(t, scriptedLLM(&gollem.Response{
+		Texts: []string{"Handled the request."}, InputToken: 10, OutputToken: 5,
+	}))
+	ssn := h.session(t, ctx)
+
+	req := h.request(ssn, "1700000008.000001")
+	req.MentionUserID = ""
+	req.MentionBotID = "B0LISTED1"
+	req.Workspace.MentionBotIDs = []string{"B0LISTED1"}
+	res, err := h.uc.StartTurn(ctx, req)
+	gt.NoError(t, err).Required()
+	gt.Value(t, res.Status).Equal(casebound.StatusStarted)
+
+	proc := h.drive(t, res.ProcessID)
+	gt.Value(t, proc.Status).Equal(agentkit.ProcessSucceeded)
+	gt.Value(t, agentkernel.ScopeFrom(proc.Metadata).ActorUserID).
+		Equal(model.CaseChannelActorID("ws-1", testChannelID))
+	gt.Array(t, h.host.Calls()).Length(1)
 }
 
 func TestValidateRequestRequiresAPersistedSession(t *testing.T) {

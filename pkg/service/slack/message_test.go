@@ -115,6 +115,61 @@ func TestMessageFromEvent_AppMentionEvent(t *testing.T) {
 	gt.Value(t, msg.Text()).Equal("<@UBOT123> help")
 }
 
+// An app's post (a Slack workflow, an integration bot) carries a bot id and no
+// user. The bot id is what [slack] mention_bots is matched against, so it must
+// survive the conversion for both event kinds.
+func TestMessageFromEvent_CarriesTheBotID(t *testing.T) {
+	ctx := context.Background()
+
+	mention := slack.MessageFromEvent(ctx, &slackevents.EventsAPIEvent{
+		Type:   slackevents.CallbackEvent,
+		TeamID: "T123456",
+		InnerEvent: slackevents.EventsAPIInnerEvent{
+			Type: "app_mention",
+			Data: &slackevents.AppMentionEvent{
+				Type:           "app_mention",
+				BotID:          "B0WORKFLOW1",
+				Text:           "<@UBOT123> please review",
+				TimeStamp:      "1234567890.123456",
+				Channel:        "C123456",
+				EventTimeStamp: "1234567890.123456",
+			},
+		},
+	})
+	gt.Value(t, mention).NotNil().Required()
+	gt.Value(t, mention.UserID()).Equal("")
+	gt.Value(t, mention.BotID()).Equal("B0WORKFLOW1")
+
+	message := slack.MessageFromEvent(ctx, &slackevents.EventsAPIEvent{
+		Type:   slackevents.CallbackEvent,
+		TeamID: "T123456",
+		InnerEvent: slackevents.EventsAPIInnerEvent{
+			Type: "message",
+			Data: &slackevents.MessageEvent{
+				Type:           "message",
+				BotID:          "B0WORKFLOW1",
+				Text:           "a workflow post",
+				TimeStamp:      "1234567890.123457",
+				Channel:        "C123456",
+				EventTimeStamp: "1234567890.123457",
+			},
+		},
+	})
+	gt.Value(t, message).NotNil().Required()
+	gt.Value(t, message.BotID()).Equal("B0WORKFLOW1")
+
+	// A person's mention has no bot id.
+	human := slack.MessageFromEvent(ctx, &slackevents.EventsAPIEvent{
+		Type: slackevents.CallbackEvent,
+		InnerEvent: slackevents.EventsAPIInnerEvent{
+			Type: "app_mention",
+			Data: &slackevents.AppMentionEvent{Type: "app_mention", User: "U123456", Channel: "C123456"},
+		},
+	})
+	gt.Value(t, human).NotNil().Required()
+	gt.Value(t, human.BotID()).Equal("")
+}
+
 func TestMessageFromEvent_UnsupportedEvent(t *testing.T) {
 	ctx := context.Background()
 

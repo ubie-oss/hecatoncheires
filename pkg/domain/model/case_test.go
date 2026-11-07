@@ -66,6 +66,46 @@ func TestIsCaseAccessible(t *testing.T) {
 			userID:   "",
 			expected: true,
 		},
+		{
+			name: "private channel-mode case is accessible to its own channel actor",
+			c: &model.Case{
+				IsPrivate:      true,
+				SlackChannelID: "C0CASE01",
+				ChannelUserIDs: []string{"U001"},
+			},
+			userID:   model.CaseChannelActorID("ws-1", "C0CASE01"),
+			expected: true,
+		},
+		{
+			name: "private case is not accessible to another channel's actor",
+			c: &model.Case{
+				IsPrivate:      true,
+				SlackChannelID: "C0CASE01",
+				ChannelUserIDs: []string{"U001"},
+			},
+			userID:   model.CaseChannelActorID("ws-1", "C0OTHER9"),
+			expected: false,
+		},
+		{
+			name: "private thread-mode case is not accessible to the monitored channel's actor",
+			c: &model.Case{
+				IsPrivate:      true,
+				SlackChannelID: "C0MONITOR",
+				SlackThreadTS:  "1700000000.000100",
+				ChannelUserIDs: []string{"U001"},
+			},
+			userID:   model.CaseChannelActorID("ws-1", "C0MONITOR"),
+			expected: false,
+		},
+		{
+			name: "private case without a channel is not accessible to an empty channel actor",
+			c: &model.Case{
+				IsPrivate:      true,
+				ChannelUserIDs: []string{"U001"},
+			},
+			userID:   "@channel:ws-1/",
+			expected: false,
+		},
 	}
 
 	for _, tt := range tests {

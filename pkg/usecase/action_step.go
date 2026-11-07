@@ -387,10 +387,11 @@ func (uc *ActionStepUseCase) notifyStepEvent(ctx context.Context, action *model.
 // actorIdentifier returns the Slack user id to record as Created/Done by.
 // When the caller has an auth token (WebUI / GraphQL flow), prefer it;
 // otherwise honour the explicit ActorRef. System-actor mutations write
-// "" so the audit trail clearly distinguishes them from human actions.
+// "" so the audit trail clearly distinguishes them from human actions; so does
+// a token naming an actor that is not a person (a case channel).
 func actorIdentifier(ctx context.Context, actor ActorRef) string {
-	if token, tokenErr := auth.TokenFromContext(ctx); tokenErr == nil {
-		return token.Sub
+	if _, tokenErr := auth.TokenFromContext(ctx); tokenErr == nil {
+		return tokenUserID(ctx)
 	}
 	if actor.Kind == ActorKindSlackUser {
 		return actor.ID

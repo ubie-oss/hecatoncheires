@@ -115,13 +115,26 @@ func (a *caseMultiActionAdapter) CreateAction(ctx context.Context, workspaceID s
 	return a.action.CreateAction(ctx, workspaceID, caseID, title, description, "", "", types.ActionStatus(""), nil)
 }
 
+// toolActorRef is the actor a cross-case tool's change is attributed to. The
+// run's actor is a Slack user for a person's mention, but a case channel for a
+// turn an app started (model.CaseChannelActorID), and that one must be shown as
+// the system rather than rendered as a "<@...>" mention of a user who does not
+// exist. Access control does not read this: the run's auth token decides it
+// (actorForAccess).
+func toolActorRef(actorID string) ActorRef {
+	if !model.IsCaseChannelActor(actorID) {
+		return ActorRef{Kind: ActorKindSlackUser, ID: actorID}
+	}
+	return ActorRef{Kind: ActorKindSystem}
+}
+
 func (a *caseMultiActionAdapter) UpdateAction(ctx context.Context, workspaceID string, actionID int64, patch casemulti.ActionUpdate, actorID string) (*model.Action, error) {
 	return a.action.UpdateAction(ctx, workspaceID, UpdateActionInput{
 		ID:          actionID,
 		Title:       patch.Title,
 		Description: patch.Description,
 		Status:      patch.Status,
-		Actor:       ActorRef{Kind: ActorKindSlackUser, ID: actorID},
+		Actor:       toolActorRef(actorID),
 		SlackSync:   SlackSyncFull,
 	})
 }
@@ -131,7 +144,7 @@ func (a *caseMultiActionAdapter) AddActionStep(ctx context.Context, workspaceID 
 		WorkspaceID: workspaceID,
 		ActionID:    actionID,
 		Title:       title,
-		Actor:       ActorRef{Kind: ActorKindSlackUser, ID: actorID},
+		Actor:       toolActorRef(actorID),
 	})
 }
 
@@ -141,6 +154,6 @@ func (a *caseMultiActionAdapter) SetActionStepDone(ctx context.Context, workspac
 		ActionID:    actionID,
 		StepID:      stepID,
 		Done:        done,
-		Actor:       ActorRef{Kind: ActorKindSlackUser, ID: actorID},
+		Actor:       toolActorRef(actorID),
 	})
 }

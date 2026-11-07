@@ -5847,6 +5847,23 @@ func TestCaseUseCase_ThreadChangeNotification(t *testing.T) {
 				i18n.T(agentCtx, i18n.MsgChangeActorSystem), "Triage", "Done"))
 	})
 
+	t.Run("a case-channel actor is attributed to the system, not mentioned as a user", func(t *testing.T) {
+		setupCtx := tokenCtx()
+		uc, slackMock, c, _ := newThreadNotifyCase(t, setupCtx)
+
+		// An agent turn an app started acts as a case channel. It is not a
+		// person, so it must never be rendered as "<@...>".
+		appCtx := auth.ContextWithToken(context.Background(),
+			&auth.Token{Sub: model.CaseChannelActorID("support", "C0CASE01")})
+		_, _, err := uc.UpdateCaseStatus(appCtx, "support", c.ID, "done")
+		gt.NoError(t, err).Required()
+
+		gt.Array(t, slackMock.threadCalls).Length(1).Required()
+		assertThreadContextLine(t, slackMock.threadCalls[0], "C-MONITOR", c.SlackThreadTS,
+			i18n.T(appCtx, i18n.MsgCaseChangeStatus,
+				i18n.T(appCtx, i18n.MsgChangeActorSystem), "Triage", "Done"))
+	})
+
 	t.Run("a Slack failure does not roll back the update", func(t *testing.T) {
 		ctx := tokenCtx()
 		uc, slackMock, c, repo := newThreadNotifyCase(t, ctx)

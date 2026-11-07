@@ -238,9 +238,18 @@ func (c *Case) UnassignUsers(userIDs []string) bool {
 
 // IsCaseAccessible checks if a user has access to a case.
 // Non-private cases are always accessible.
-// Private cases are accessible only if the userID is in ChannelUserIDs.
+// Private cases are accessible only if the userID is in ChannelUserIDs, or if
+// userID is the case-channel actor of this channel-mode case's own channel
+// (see CaseChannelActorID).
 func IsCaseAccessible(c *Case, userID string) bool {
 	if !c.IsPrivate {
+		return true
+	}
+	// Only a channel-mode case owns its channel. A thread-mode case's
+	// SlackChannelID is the monitored channel every case of the workspace
+	// shares, so matching it would open all of them.
+	if _, channelID, ok := ParseCaseChannelActor(userID); ok &&
+		c.SlackThreadTS == "" && c.SlackChannelID != "" && channelID == c.SlackChannelID {
 		return true
 	}
 	for _, id := range c.ChannelUserIDs {

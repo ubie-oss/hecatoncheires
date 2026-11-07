@@ -126,6 +126,40 @@ func TestWorkspaceAccess_NoPolicyAnywhereFilterKeepsAll(t *testing.T) {
 	gt.Value(t, users.calls.Load()).Equal(int32(0))
 }
 
+// A case-channel actor is what an agent turn started by an app acts as. It is
+// not a person, so the workspace policy — which is about people — is not asked
+// about it in its own workspace. Every other workspace with a policy refuses
+// it, so a cross-workspace tool cannot use it to reach a closed workspace.
+func TestWorkspaceAccess_CaseChannelActorIsLimitedToItsWorkspace(t *testing.T) {
+	f := newAccessFixture(t, time.Minute, map[string]string{
+		"secured": policyDenyAll,
+		"other":   policyDenyAll,
+	}, "secured", "other", "open")
+	ctx := context.Background()
+	actor := model.CaseChannelActorID("secured", "C0CASE01")
+
+	gt.NoError(t, f.uc.Authorize(ctx, "secured", actor))
+	gt.Error(t, f.uc.Authorize(ctx, "other", actor)).Is(model.ErrWorkspaceAccessDenied)
+	// A workspace with no policy stays open to everyone.
+	gt.NoError(t, f.uc.Authorize(ctx, "open", actor))
+
+	tokenCtx := auth.ContextWithToken(ctx, &auth.Token{Sub: actor})
+	gt.NoError(t, f.uc.AuthorizeCurrentUser(tokenCtx, "secured"))
+	gt.Error(t, f.uc.AuthorizeCurrentUser(tokenCtx, "other")).Is(model.ErrWorkspaceAccessDenied)
+
+	got, err := f.uc.FilterAccessibleForCurrentUser(tokenCtx, f.reg.List())
+	gt.NoError(t, err).Required()
+	ids := make([]string, 0, len(got))
+	for _, e := range got {
+		ids = append(ids, e.Workspace.ID)
+	}
+	gt.Value(t, ids).Equal([]string{"secured", "open"})
+	gt.Value(t, f.users.calls.Load()).Equal(int32(0))
+
+	// A person is still checked.
+	gt.Error(t, f.uc.Authorize(ctx, "secured", "U1")).Is(model.ErrWorkspaceAccessDenied)
+}
+
 func TestWorkspaceAccess_AllowValues(t *testing.T) {
 	f := newAccessFixture(t, time.Minute, map[string]string{
 		"allow": policyAllowAll,

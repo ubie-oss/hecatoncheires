@@ -34,7 +34,7 @@ func MessageFromEvent(_ context.Context, ev *slackevents.EventsAPIEvent) *slackm
 			evt.EventTimeStamp,
 			now,
 			nil,
-		)
+		).WithBotID(evt.BotID)
 
 	case *slackevents.MessageEvent:
 		threadTS := ""
@@ -67,7 +67,7 @@ func MessageFromEvent(_ context.Context, ev *slackevents.EventsAPIEvent) *slackm
 			evt.EventTimeStamp,
 			now,
 			files,
-		)
+		).WithBotID(evt.BotID)
 
 	default:
 		return nil
