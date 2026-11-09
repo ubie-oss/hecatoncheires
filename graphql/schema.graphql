@@ -852,6 +852,11 @@ type Query {
   # Reuses the ActionConfig shape since both are generic status sets.
   caseStatusConfig(workspaceId: String!): ActionConfig
 
+  # actionsEnabled reports whether the workspace's Cases have Actions: always
+  # true for a channel-mode workspace, and for a thread-mode workspace only when
+  # its [case] actions option is on (default off).
+  actionsEnabled(workspaceId: String!): Boolean!
+
   # frequentAssigneeIDs returns the Slack user IDs most often assigned to this
   # workspace's Cases, most assigned first. It orders the assignee picker, so it
   # is a hint rather than an exact statistic: the ranking is cached server-side

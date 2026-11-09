@@ -438,7 +438,7 @@ func TestActionStepUseCase_ThreadModeCaseNotifiesInTheCaseThread(t *testing.T) {
 	ctx := auth.ContextWithToken(context.Background(), &auth.Token{Sub: "UCREATOR"})
 	c := newThreadModeCase(t, repo)
 
-	actionUC := usecase.NewActionUseCase(repo, nil, fake, "", nil)
+	actionUC := usecase.NewActionUseCase(repo, threadModeActionsRegistry(true), fake, "", nil)
 	action, err := actionUC.CreateAction(ctx, testWorkspaceID, c.ID, "Sample action", "", "", "", "", nil)
 	gt.NoError(t, err).Required()
 	fake.threadCalls = nil

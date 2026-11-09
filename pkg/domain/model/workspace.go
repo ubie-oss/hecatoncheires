@@ -79,6 +79,10 @@ type WorkspaceEntry struct {
 	// Cases in thread mode (the Kanban columns). Non-nil only for thread-mode
 	// workspaces; reuses the generic ActionStatusSet value type.
 	CaseStatusSet *ActionStatusSet
+	// CaseActions is [case] actions: whether the Cases of a thread-mode
+	// workspace have Actions. Default false. Meaningless in channel mode, where
+	// Cases always have Actions; read it through ActionsEnabled.
+	CaseActions bool
 	// ReactionEmoji is the Slack reaction (emoji name, without surrounding
 	// colons) that triggers case creation for this workspace. Empty when the
 	// reaction trigger is disabled. Only meaningful in thread mode, and unique
@@ -103,6 +107,13 @@ type WorkspaceEntry struct {
 // IsThreadMode reports whether this workspace uses thread-per-case binding.
 func (e *WorkspaceEntry) IsThreadMode() bool {
 	return e != nil && e.CaseMode.IsThread()
+}
+
+// ActionsEnabled reports whether this workspace's Cases have Actions: always
+// in channel mode, and in thread mode only when [case] actions opts in. A nil
+// entry (an unregistered workspace) reads as channel mode, the default.
+func (e *WorkspaceEntry) ActionsEnabled() bool {
+	return !e.IsThreadMode() || e.CaseActions
 }
 
 // WorkspaceRegistry holds workspace configurations.

@@ -525,6 +525,7 @@ type ComplexityRoot struct {
 		Action                         func(childComplexity int, workspaceID string, id int) int
 		Actions                        func(childComplexity int, workspaceID string, filter *graphql1.ActionArchiveFilter) int
 		ActionsByCase                  func(childComplexity int, workspaceID string, caseID int, filter *graphql1.ActionArchiveFilter) int
+		ActionsEnabled                 func(childComplexity int, workspaceID string) int
 		AssistLogs                     func(childComplexity int, workspaceID string, caseID int, limit *int, offset *int) int
 		Case                           func(childComplexity int, workspaceID string, id int) int
 		CaseImport                     func(childComplexity int, workspaceID string, id string) int
@@ -778,6 +779,7 @@ type QueryResolver interface {
 	FieldConfiguration(ctx context.Context, workspaceID string) (*graphql1.FieldConfiguration, error)
 	ExistingSlackChannelCandidates(ctx context.Context, workspaceID string, query *string, refresh *bool) (*graphql1.SlackChannelCandidateList, error)
 	CaseStatusConfig(ctx context.Context, workspaceID string) (*graphql1.ActionConfig, error)
+	ActionsEnabled(ctx context.Context, workspaceID string) (bool, error)
 	FrequentAssigneeIDs(ctx context.Context, workspaceID string) ([]string, error)
 	SlackUsers(ctx context.Context) ([]*graphql1.SlackUser, error)
 	SlackJoinedChannels(ctx context.Context) ([]*graphql1.SlackChannelInfo, error)
@@ -3194,6 +3196,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Query.ActionsByCase(childComplexity, args["workspaceId"].(string), args["caseID"].(int), args["filter"].(*graphql1.ActionArchiveFilter)), true
+	case "Query.actionsEnabled":
+		if e.ComplexityRoot.Query.ActionsEnabled == nil {
+			break
+		}
+
+		args, err := ec.field_Query_actionsEnabled_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.ActionsEnabled(childComplexity, args["workspaceId"].(string)), true
 	case "Query.assistLogs":
 		if e.ComplexityRoot.Query.AssistLogs == nil {
 			break
@@ -4894,6 +4907,11 @@ type Query {
   # columns) for a thread-mode workspace, or null for channel-mode workspaces.
   # Reuses the ActionConfig shape since both are generic status sets.
   caseStatusConfig(workspaceId: String!): ActionConfig
+
+  # actionsEnabled reports whether the workspace's Cases have Actions: always
+  # true for a channel-mode workspace, and for a thread-mode workspace only when
+  # its [case] actions option is on (default off).
+  actionsEnabled(workspaceId: String!): Boolean!
 
   # frequentAssigneeIDs returns the Slack user IDs most often assigned to this
   # workspace's Cases, most assigned first. It orders the assignee picker, so it
@@ -7963,6 +7981,20 @@ func (ec *executionContext) field_Query_actionsByCase_args(ctx context.Context, 
 		return nil, err
 	}
 	args["filter"] = arg2
+	return args, nil
+}
+
+func (ec *executionContext) field_Query_actionsEnabled_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "workspaceId",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["workspaceId"] = arg0
 	return args, nil
 }
 
@@ -18692,6 +18724,50 @@ func (ec *executionContext) fieldContext_Query_caseStatusConfig(ctx context.Cont
 	return fc, nil
 }
 
+func (ec *executionContext) _Query_actionsEnabled(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Query_actionsEnabled(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Query().ActionsEnabled(ctx, fc.Args["workspaceId"].(string))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Query_actionsEnabled(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_actionsEnabled_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Query_frequentAssigneeIDs(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -28131,6 +28207,28 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 				}()
 				res = ec._Query_caseStatusConfig(ctx, field)
 				if res == graphql.RequiredNull {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "actionsEnabled":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_actionsEnabled(ctx, field)
+				if res == graphql.Null {
 					atomic.AddUint32(&fs.Invalids, 1)
 				}
 				return res

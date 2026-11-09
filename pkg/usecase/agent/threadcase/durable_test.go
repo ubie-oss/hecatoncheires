@@ -797,9 +797,27 @@ func TestDurableRecordsTheActorAndScope(t *testing.T) {
 	gt.Value(t, proc.Agent).Equal(agentkernel.AgentCaseThread)
 	// An interactive turn must never queue behind a scheduled batch.
 	gt.Value(t, sc.SlotGated).Equal(false)
-	// A mention on an existing case may manage its Actions, so its scope lifts
-	// the thread-mode workspace's default of no Action tools.
-	gt.Value(t, sc.ThreadModeActions).Equal(true)
+	// The workspace leaves [case] actions at its default (off), so the mention
+	// gets no Action tools either.
+	gt.Value(t, sc.ThreadModeActions).Equal(false)
+}
+
+// A mention on a workspace that enables [case] actions lifts the thread-mode
+// default of no Action tools, for the turn and the sub-agents that inherit its
+// metadata.
+func TestDurableMentionOnAWorkspaceWithActionsGrantsActionTools(t *testing.T) {
+	ctx := context.Background()
+	h := newDurableHarness(t, durableLLM(investigatePlan))
+	ssn := h.session(t, ctx, 42)
+
+	req := h.mentionRequest(ssn, "1700000001.000015")
+	req.Workspace.CaseActions = true
+	_, err := h.agent.StartTurn(ctx, req)
+	gt.NoError(t, err).Required()
+
+	proc, err := h.kernel.GetProcess(ctx, h.spawned(t, ssn, "1700000001.000015"))
+	gt.NoError(t, err).Required()
+	gt.Value(t, agentkernel.ScopeFrom(proc.Metadata).ThreadModeActions).Equal(true)
 }
 
 // A cross-channel reaction has two threads: the case lives in the monitored

@@ -1223,6 +1223,28 @@ workspaces; dragging a Case into a `closed` column closes the Case. The
 investigation agent can also move a Case to a closed status when a mention
 indicates the issue is resolved.
 
+### Actions on thread-mode Cases (`[case] actions`)
+
+| Key | Type | Required | Default | Description |
+|-----|------|----------|---------|-------------|
+| `actions` | bool | No | `false` | Thread mode only. Gives this workspace's Cases Actions: the case detail page shows the Related Actions section, Actions can be created on (and moved into) its Cases, and the agent that answers a mention in a Case thread gets the `core__*` action tools. Off by default, so a thread-mode workspace configured before the option existed keeps having no Actions. Channel-mode Cases always have Actions; setting it there is ignored with a startup warning. |
+
+```toml
+[case]
+initial = "triage"
+closed  = ["done"]
+actions = true
+```
+
+With the option off, creating an Action on one of the workspace's Cases (from
+any entry point) is rejected, and its Cases' detail pages show no Related
+Actions section. Turning it off after Actions were created leaves them stored
+but shown nowhere in the UI; `validate --check-db` reports them as
+`action_actions_disabled` (see [CLI → validate](cli.md#what---check-db-checks)).
+The thread-mode Action board is unaffected either way: the board of a
+thread-mode workspace always lists Cases. How these Actions are announced in
+Slack is described in [Slack → Actions in thread mode](slack.md#actions-in-thread-mode).
+
 ### Case trigger (thread mode)
 
 `[slack] trigger` selects **what starts a Case** in a monitored channel:

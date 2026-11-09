@@ -434,6 +434,7 @@ func buildRegistry(wc *config.WorkspaceConfig) (*model.WorkspaceRegistry, *model
 		CaseMode:              wc.CaseMode,
 		SlackMonitorChannelID: wc.SlackMonitorChannel,
 		CaseStatusSet:         wc.CaseStatusSet,
+		CaseActions:           wc.CaseActions,
 
 		AllowExistingSlackChannel: wc.AllowExistingSlackChannel,
 	}

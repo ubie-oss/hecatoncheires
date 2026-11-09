@@ -108,6 +108,8 @@ test.describe('Thread-mode Case board', () => {
     await expect(status).toHaveValue('in_review');
   });
 
+  // The fixture workspace sets `[case] actions = true`; with the option off
+  // (the default) the section is hidden, which CaseDetail.test.tsx covers.
   test('a thread-mode case manages Actions from its detail page', async ({ page }) => {
     const caseList = new CaseListPage(page);
     const caseForm = new CaseFormPage(page);

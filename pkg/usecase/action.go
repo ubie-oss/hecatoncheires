@@ -167,6 +167,46 @@ func resolveActionStatusSet(registry *model.WorkspaceRegistry, workspaceID strin
 	return entry.ActionStatusSet
 }
 
+// ensureCaseAcceptsActions rejects putting an Action on c when c's workspace
+// does not have Actions: a thread-mode workspace has them only when [case]
+// actions opts in (model.WorkspaceEntry.ActionsEnabled). The workspace's mode
+// decides it. When the workspace is not registered (no registry wired, or an
+// unknown id) the case's own binding stands in for the mode, and a thread-bound
+// case is refused — the default of the option.
+func (uc *ActionUseCase) ensureCaseAcceptsActions(workspaceID string, c *model.Case) error {
+	enabled := !c.IsThreadBound()
+	if uc.registry != nil {
+		entry, err := uc.registry.Get(workspaceID)
+		switch {
+		case err == nil:
+			enabled = entry.ActionsEnabled()
+		case !errors.Is(err, model.ErrWorkspaceNotFound):
+			return goerr.Wrap(err, "resolve the workspace of the action's case",
+				goerr.V(CaseIDKey, c.ID))
+		}
+	}
+	if !enabled {
+		return goerr.Wrap(ErrCaseActionsDisabled, "this workspace does not enable actions on thread-mode cases",
+			goerr.V(CaseIDKey, c.ID),
+			goerr.V("workspace_id", workspaceID))
+	}
+	return nil
+}
+
+// ActionsEnabled reports whether the Cases of the workspace have Actions,
+// which is what the Web UI reads to show or hide the Related Actions section.
+func (uc *ActionUseCase) ActionsEnabled(_ context.Context, workspaceID string) (bool, error) {
+	if uc.registry == nil {
+		// No workspace configuration to consult: the channel-mode default.
+		return true, nil
+	}
+	entry, err := uc.registry.Get(workspaceID)
+	if err != nil {
+		return false, goerr.Wrap(err, "resolve the workspace", goerr.V("workspace_id", workspaceID))
+	}
+	return entry.ActionsEnabled(), nil
+}
+
 // actionNotifyTarget is where an Action's Slack notifications (change
 // summaries, step / comment / archive notices) are posted.
 type actionNotifyTarget struct {
@@ -279,6 +319,10 @@ func (uc *ActionUseCase) CreateAction(ctx context.Context, workspaceID string, c
 
 	actorID, checkAccess := tokenActor(ctx)
 	if err := assertCaseWriteAccess(caseModel, actorID, checkAccess); err != nil {
+		return nil, err
+	}
+
+	if err := uc.ensureCaseAcceptsActions(workspaceID, caseModel); err != nil {
 		return nil, err
 	}
 
@@ -496,10 +540,16 @@ func (uc *ActionUseCase) UpdateAction(ctx context.Context, workspaceID string, i
 	}
 
 	if in.CaseID != nil && *in.CaseID != existing.CaseID {
-		if _, err := uc.repo.Case().Get(ctx, workspaceID, *in.CaseID); err != nil {
+		newCase, err := uc.repo.Case().Get(ctx, workspaceID, *in.CaseID)
+		if err != nil {
 			return nil, goerr.Wrap(ErrCaseNotFound, "new case not found",
 				goerr.V(CaseIDKey, *in.CaseID),
 				goerr.V(ActionIDKey, in.ID))
+		}
+		// Reparenting must not move an action into a case whose workspace has
+		// no Actions. Same boundary invariant as CreateAction.
+		if err := uc.ensureCaseAcceptsActions(workspaceID, newCase); err != nil {
+			return nil, err
 		}
 	}
 

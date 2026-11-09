@@ -1675,6 +1675,11 @@ func (r *queryResolver) CaseStatusConfig(ctx context.Context, workspaceID string
 	return toActionConfig(statusSet), nil
 }
 
+// ActionsEnabled is the resolver for the actionsEnabled field.
+func (r *queryResolver) ActionsEnabled(ctx context.Context, workspaceID string) (bool, error) {
+	return r.UseCases.Action.ActionsEnabled(ctx, workspaceID)
+}
+
 // FrequentAssigneeIDs is the resolver for the frequentAssigneeIDs field.
 func (r *queryResolver) FrequentAssigneeIDs(ctx context.Context, workspaceID string) ([]string, error) {
 	return r.UseCases.Case.ListFrequentAssignees(ctx, workspaceID)

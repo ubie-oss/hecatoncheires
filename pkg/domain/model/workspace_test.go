@@ -364,3 +364,13 @@ func TestWorkspaceEntry_SlackTeamID(t *testing.T) {
 	gt.NoError(t, err).Required()
 	gt.Value(t, entry2.SlackTeamID).Equal("")
 }
+
+func TestWorkspaceEntry_ActionsEnabled(t *testing.T) {
+	var unregistered *model.WorkspaceEntry
+	gt.Bool(t, unregistered.ActionsEnabled()).True()
+	gt.Bool(t, (&model.WorkspaceEntry{}).ActionsEnabled()).True()
+	// CaseActions only matters in thread mode.
+	gt.Bool(t, (&model.WorkspaceEntry{CaseActions: true}).ActionsEnabled()).True()
+	gt.Bool(t, (&model.WorkspaceEntry{CaseMode: model.CaseModeThread}).ActionsEnabled()).False()
+	gt.Bool(t, (&model.WorkspaceEntry{CaseMode: model.CaseModeThread, CaseActions: true}).ActionsEnabled()).True()
+}

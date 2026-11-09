@@ -843,3 +843,47 @@ func TestToolSetProbeNilReturnsThePaletteUnchanged(t *testing.T) {
 	gt.NoError(t, err).Required()
 	gt.Value(t, got).Equal(agent.KnownToolSetIDsJob)
 }
+
+// TestToolFactoryResolvesMemoToolsForAThreadModeMention pins that the memo
+// toolset the thread-mode mention palette now carries resolves to the memo
+// tools on a thread-mode workspace with memos: the planner is declared the
+// reads, and a task given the memo toolset gets the writer.
+func TestToolFactoryResolvesMemoToolsForAThreadModeMention(t *testing.T) {
+	ctx := context.Background()
+	repo := memory.New()
+	ctx = seedCase(t, ctx, repo, &model.Case{
+		Title:          "thread case",
+		SlackChannelID: "C-THREAD",
+		SlackThreadTS:  "1700000000.000100",
+	})
+
+	ws := threadWorkspace()
+	ws.MemoConfig = &config.MemoConfig{FieldSchema: &config.FieldSchema{Fields: []config.FieldDefinition{
+		{ID: "note", Type: types.FieldTypeText},
+	}}}
+	factory, err := kernel.NewToolFactory(kernel.ToolDeps{
+		Repo:     repo,
+		Registry: testRegistry(ws),
+		MemoUC:   stubMemoMutator{},
+	})
+	gt.NoError(t, err).Required()
+
+	sc := kernel.Scope{WorkspaceID: "ws-1", CaseID: 1, ActorUserID: "U1", ToolSets: []string{kernel.ToolSetsAll}}
+
+	t.Run("the mention planner reads memos", func(t *testing.T) {
+		tools, err := factory(ctx, newProcess(kernel.AgentCaseThread, sc))
+		gt.NoError(t, err).Required()
+		names := toolNames(tools)
+		gt.Bool(t, slices.Contains(names, "memo__list_memos")).True()
+		gt.Bool(t, slices.Contains(names, "memo__get_memo")).True()
+		gt.Bool(t, slices.Contains(names, "memo__apply_memo_changes")).False()
+	})
+
+	t.Run("a task given the memo toolset writes memos", func(t *testing.T) {
+		task := sc
+		task.ToolSets = []string{agent.ToolSetMemo}
+		tools, err := factory(ctx, newProcess(kernel.AgentTask, task))
+		gt.NoError(t, err).Required()
+		gt.Bool(t, slices.Contains(toolNames(tools), "memo__apply_memo_changes")).True()
+	})
+}

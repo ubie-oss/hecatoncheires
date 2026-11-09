@@ -113,17 +113,19 @@ var KnownToolSetIDsNoCore = []string{
 }
 
 // KnownToolSetIDsThreadWrite is KnownToolSetIDsNoCore plus the case writer
-// toolset and the action toolsets. Thread-mode agents advertise this to the
-// planner on mention turns, where a concrete case exists to act on and a human
-// asked for the change: a sub-agent may then edit, assign, and transition that
-// case, and read (core_ro) or create / update / archive (core) its Actions.
-// The action ids resolve to tools only because the mention turn's scope sets
-// Scope.ThreadModeActions; the host probes the palette, so an id that resolves
-// to nothing is never advertised. Materialize and creation turns advertise the
+// toolset, the action toolsets and the memo toolset. Thread-mode agents
+// advertise this to the planner on mention turns, where a concrete case exists
+// to act on and a human asked for the change: a sub-agent may then edit,
+// assign, and transition that case, read (core_ro) or create / update /
+// archive (core) its Actions, and read or write its memos. The action ids
+// resolve to tools only when the mention turn's scope sets
+// Scope.ThreadModeActions (the workspace enables [case] actions), and the memo
+// id only when the workspace enables memos; the host probes the palette, so an
+// id that resolves to nothing is never advertised. Materialize and creation turns advertise the
 // plain KnownToolSetIDsNoCore instead, so the planner is never offered a writer
 // tool the resolver cannot wire — the prompt-vs-capability mismatch the
 // architecture rule forbids.
-var KnownToolSetIDsThreadWrite = append(append([]string{}, KnownToolSetIDsNoCore...), ToolSetCaseWrite, ToolSetCoreRO, ToolSetCore)
+var KnownToolSetIDsThreadWrite = append(append([]string{}, KnownToolSetIDsNoCore...), ToolSetCaseWrite, ToolSetCoreRO, ToolSetCore, ToolSetMemo)
 
 // KnownToolSetIDsWorkspaceChannel is the planner-advertised list for the
 // workspace-channel agent: the cross-case toolset plus the read-only auxiliary

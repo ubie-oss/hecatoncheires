@@ -115,7 +115,8 @@ Each Workspace chooses how Cases bind to Slack, via `[slack] mode`:
   thread runs an investigation agent that can answer, fill in the Case fields, or
   close the Case. Thread-mode Cases do **not** use Drafts, and the configurable
   status set (`[case.status]`) attaches to the Case itself, so the Kanban board
-  shows Cases. Actions are still available: they are managed from the Case
+  shows Cases. A workspace can still give its Cases Actions by setting
+  `[case] actions = true` (off by default): they are then managed from the Case
   detail page or by mentioning the bot in the Case thread, and their Slack
   notifications are quiet one-line replies in the Case thread (see
   [Slack → Actions in thread mode](slack.md#actions-in-thread-mode)). **Apart

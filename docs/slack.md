@@ -432,10 +432,14 @@ the single channel named in `[slack] channel` and turns conversations into Cases
 Bot-authored triggers (an intake-form app's post or mention) start a Case only
 when `[slack] accept_bot = true`.
 
-Thread-mode Cases do **not** create Drafts. They do have Actions, managed from the
-Case detail page of the Web UI or by mentioning the bot in the Case thread ("add
-an action to …", "mark the … action done"); their Slack notifications go into the
-Case thread and stay quiet (see [Actions in thread mode](#actions-in-thread-mode)). Jobs run
+Thread-mode Cases do **not** create Drafts. A workspace that sets
+[`[case] actions = true`](configuration.md#actions-on-thread-mode-cases-case-actions)
+(off by default) gives them Actions, managed from the Case detail page of the Web
+UI or by mentioning the bot in the Case thread ("add an action to …", "mark the
+… action done"); their Slack notifications go into the Case thread and stay quiet
+(see [Actions in thread mode](#actions-in-thread-mode)). Memos, when the
+workspace configures them, can likewise be read and written by mentioning the
+bot in the Case thread. Jobs run
 identically to channel mode and post their output into the Case thread.
 
 **Case changes are announced in the thread.** When a Case's title, assignees, or
@@ -573,7 +577,9 @@ and the deep-link format.
 
 ### Actions in thread mode
 
-A thread-mode Case has no channel of its own: its Slack conversation is one
+Thread-mode Cases have Actions only when the workspace sets
+[`[case] actions = true`](configuration.md#actions-on-thread-mode-cases-case-actions)
+(off by default). A thread-mode Case has no channel of its own: its Slack conversation is one
 thread of the monitored channel, shared with the people discussing the Case. The
 Action card described above would put a large interactive message into that
 conversation for every Action, so thread-mode Actions use a quieter shape:

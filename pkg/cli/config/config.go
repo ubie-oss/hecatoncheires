@@ -227,6 +227,12 @@ type CaseSection struct {
 	Closed  []string                `toml:"closed"`
 	Status  []ActionStatusConfigRow `toml:"status"`
 	Prompts CasePromptsSection      `toml:"prompts"`
+	// Actions enables Actions on the Cases of a thread-mode workspace: the Web
+	// UI's Related Actions section, action creation and reparenting, and the
+	// action tools of the mention agent. Default false, so a thread-mode
+	// workspace configured before the option existed keeps having no Actions.
+	// Channel-mode workspaces always have Actions and ignore it.
+	Actions bool `toml:"actions"`
 }
 
 // hasStatusConfig reports whether the section configures a case status set
@@ -402,6 +408,10 @@ type WorkspaceConfig struct {
 	SlackMonitorChannel string
 	AcceptBot           bool
 	CaseStatusSet       *model.ActionStatusSet
+	// CaseActions is [case] actions: whether a thread-mode workspace's Cases
+	// have Actions. Always false for a channel-mode workspace, which has
+	// Actions regardless (see model.WorkspaceEntry.ActionsEnabled).
+	CaseActions bool
 	// ReactionEmoji is the normalized (colon-stripped) reaction trigger emoji,
 	// empty when disabled.
 	ReactionEmoji string
@@ -1120,6 +1130,10 @@ func parseWorkspaceConfig(src WorkspaceConfigSource) (*WorkspaceConfig, error) {
 			logging.Default().Warn("channel-mode workspace ignores [case.status]",
 				"workspace_id", wsID, "config_path", path)
 		}
+		if appCfg.Case != nil && appCfg.Case.Actions {
+			logging.Default().Warn("channel-mode workspace ignores [case] actions (channel-mode cases always have actions)",
+				"workspace_id", wsID, "config_path", path)
+		}
 		if caseCreatePrompt != "" {
 			logging.Default().Warn("channel-mode workspace ignores [case.prompts] create",
 				"workspace_id", wsID, "config_path", path)
@@ -1162,6 +1176,7 @@ func parseWorkspaceConfig(src WorkspaceConfigSource) (*WorkspaceConfig, error) {
 		SlackMonitorChannel:  appCfg.Slack.Channel,
 		AcceptBot:            appCfg.Slack.AcceptBot,
 		CaseStatusSet:        caseStatusSet,
+		CaseActions:          caseMode.IsThread() && appCfg.Case != nil && appCfg.Case.Actions,
 		ReactionEmoji:        normalizeReactionEmoji(appCfg.Slack.Reaction),
 		WorkspaceChannelID:   appCfg.Slack.WorkspaceChannel,
 		WorkspaceAgentPrompt: workspaceAgentPrompt,
@@ -1252,6 +1267,7 @@ func BuildWorkspaceRegistry(workspaceConfigs []*WorkspaceConfig) *model.Workspac
 			SlackMonitorChannelID:   wc.SlackMonitorChannel,
 			AcceptBot:               wc.AcceptBot,
 			CaseStatusSet:           wc.CaseStatusSet,
+			CaseActions:             wc.CaseActions,
 			ReactionEmoji:           wc.ReactionEmoji,
 			SlackWorkspaceChannelID: wc.WorkspaceChannelID,
 			WorkspaceAgentPrompt:    wc.WorkspaceAgentPrompt,

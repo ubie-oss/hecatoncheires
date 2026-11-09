@@ -1660,6 +1660,68 @@ type = "text"
 		gt.Value(t, configs[0].CaseTrigger).Equal(model.CaseTriggerInstant)
 		// case_summary defaults to full when omitted.
 		gt.Value(t, configs[0].CaseSummary).Equal(model.CaseSummaryFull)
+		// [case] actions defaults to off, so the workspace has no Actions.
+		gt.Value(t, configs[0].CaseActions).Equal(false)
+		entry, err := config.BuildWorkspaceRegistry(configs).Get("support")
+		gt.NoError(t, err).Required()
+		gt.Bool(t, entry.ActionsEnabled()).False()
+	})
+
+	t.Run("thread mode enables actions with [case] actions", func(t *testing.T) {
+		configs, err := writeAndLoad(t, `
+[workspace]
+id = "support"
+
+[slack]
+mode = "thread"
+channel = "C0123ABC"
+
+[case]
+initial = "TRIAGE"
+closed = ["DONE"]
+actions = true
+
+  [[case.status]]
+  id = "TRIAGE"
+  name = "Triage"
+
+  [[case.status]]
+  id = "DONE"
+  name = "Done"
+
+[[fields]]
+id = "a"
+name = "A"
+type = "text"
+`)
+		gt.NoError(t, err).Required()
+		gt.Array(t, configs).Length(1).Required()
+		gt.Value(t, configs[0].CaseActions).Equal(true)
+		entry, err := config.BuildWorkspaceRegistry(configs).Get("support")
+		gt.NoError(t, err).Required()
+		gt.Value(t, entry.CaseActions).Equal(true)
+		gt.Bool(t, entry.ActionsEnabled()).True()
+	})
+
+	t.Run("channel mode ignores [case] actions and always has actions", func(t *testing.T) {
+		configs, err := writeAndLoad(t, `
+[workspace]
+id = "risk"
+
+[case]
+actions = true
+
+[[fields]]
+id = "a"
+name = "A"
+type = "text"
+`)
+		gt.NoError(t, err).Required()
+		gt.Array(t, configs).Length(1).Required()
+		gt.Value(t, configs[0].CaseActions).Equal(false)
+		entry, err := config.BuildWorkspaceRegistry(configs).Get("risk")
+		gt.NoError(t, err).Required()
+		gt.Bool(t, entry.ActionsEnabled()).True()
 	})
 
 	t.Run("thread mode selects mention trigger", func(t *testing.T) {

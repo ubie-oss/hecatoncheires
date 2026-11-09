@@ -207,8 +207,12 @@ so every entry point (GraphQL, Slack, agent tools, eval) is covered uniformly:
   the Action, never broadcast and never folded into the channel notification
   slot. The routing lives in `resolveActionNotifyTarget` / `postActionNotice`
   (`pkg/usecase/action.go`), shared by the action, step and comment usecases.
-  On the agent side only the thread-case **mention** turn gets the action
-  (`core__*`) tools in a thread-mode workspace: its scope sets
+  A thread-mode workspace has Actions only when it sets `[case] actions = true`
+  (default off, so existing workspaces are unaffected): `CreateAction` and the
+  reparent path reject a Case of a workspace without them
+  (`ErrCaseActionsDisabled`), and the Web UI reads `actionsEnabled` to hide the
+  section. On the agent side only the thread-case **mention** turn of such a
+  workspace gets the action (`core__*`) tools: its scope sets
   `Scope.ThreadModeActions`, which its sub-agents inherit, and the kernel
   withholds the core toolset (`OmitCore`) from every other run there — create
   and materialize turns, Jobs (runtime and eval env) and the workspace agent,
