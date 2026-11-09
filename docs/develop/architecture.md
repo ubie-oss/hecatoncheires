@@ -207,10 +207,12 @@ so every entry point (GraphQL, Slack, agent tools, eval) is covered uniformly:
   the Action, never broadcast and never folded into the channel notification
   slot. The routing lives in `resolveActionNotifyTarget` / `postActionNotice`
   (`pkg/usecase/action.go`), shared by the action, step and comment usecases.
-  The agent tool wiring still withholds the action (`core__*`) tools for
-  thread-mode in all three hosts (Job runtime, case-bound mention agent, eval
-  env): the thread-mode agents and Job prompt are built around the Case board
-  status, and offering them Actions is a separate change.
+  On the agent side only the thread-case **mention** turn gets the action
+  (`core__*`) tools in a thread-mode workspace: its scope sets
+  `Scope.ThreadModeActions`, which its sub-agents inherit, and the kernel
+  withholds the core toolset (`OmitCore`) from every other run there — create
+  and materialize turns, Jobs (runtime and eval env) and the workspace agent,
+  whose prompts are built around the Case board status.
 - **Thread-mode Jobs embed the thread's recent messages in the system prompt.**
   Because a thread-mode Job has no Actions to anchor on, `JobRunner` loads the
   Case's recent Slack messages (`CaseMessageRepository.List`, bounded to the

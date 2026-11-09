@@ -36,7 +36,11 @@ func TestBuildSystemPrompt_ThreadContext(t *testing.T) {
 	gt.String(t, prompt).Contains("Payment outage")
 	gt.String(t, prompt).Contains("severity")
 	gt.String(t, prompt).Contains("DONE")
-	gt.String(t, prompt).Contains("CANNOT create or manage Actions")
+	// A mention turn may manage the case's Actions; the prompt names the tools
+	// the turn's scope grants (Scope.ThreadModeActions).
+	gt.Bool(t, strings.Contains(prompt, "CANNOT create or manage Actions")).False()
+	gt.String(t, prompt).Contains("manage this case's Actions")
+	gt.String(t, prompt).Contains("`core__list_actions`")
 }
 
 // TestBuildSystemPrompt_TemplateRendersEverySection drives every action of

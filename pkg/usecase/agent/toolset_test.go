@@ -286,8 +286,9 @@ func TestToolSetResolver_ResolveJira(t *testing.T) {
 }
 
 func TestKnownToolSetIDsThreadWrite(t *testing.T) {
-	// It is the no-core list plus exactly the case-write id, in order.
-	want := append(append([]string{}, agent.KnownToolSetIDsNoCore...), agent.ToolSetCaseWrite)
+	// It is the no-core list plus exactly the case-write id and the two action
+	// ids, in order.
+	want := append(append([]string{}, agent.KnownToolSetIDsNoCore...), agent.ToolSetCaseWrite, agent.ToolSetCoreRO, agent.ToolSetCore)
 	gt.Array(t, agent.KnownToolSetIDsThreadWrite).Equal(want)
 }
 

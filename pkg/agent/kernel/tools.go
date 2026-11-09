@@ -319,17 +319,18 @@ func buildToolSetDeps(d ToolDeps, sc Scope, entry *model.WorkspaceEntry, target 
 		}
 	}
 
-	// Agents get Action tools only in channel-mode WORKSPACES. A thread-mode
-	// workspace's agents track progress through the board status, and its
-	// Actions are managed from the Web UI, so the whole core toolset is withheld
-	// there.
+	// A thread-mode WORKSPACE withholds the whole core (action) toolset unless
+	// the run's scope grants it (Scope.ThreadModeActions, set only by the
+	// thread-mode mention turn and inherited by its sub-agents). Its other agents
+	// — case creation, materialize, Jobs, the workspace agent — track progress
+	// through the board status and have no Action guidance in their prompts.
 	//
 	// The workspace's mode decides it, not the case's SlackThreadTS. The two are
 	// not equivalent: a thread-mode workspace can hold a case whose thread is not
 	// set yet, and keying on the case would hand that case action tools its
 	// workspace does not support. The pre-agentkit hosts keyed on the workspace
 	// for the same reason.
-	if entry != nil && entry.IsThreadMode() {
+	if entry != nil && entry.IsThreadMode() && !sc.ThreadModeActions {
 		deps.OmitCore = true
 	}
 

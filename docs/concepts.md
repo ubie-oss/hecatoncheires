@@ -116,11 +116,12 @@ Each Workspace chooses how Cases bind to Slack, via `[slack] mode`:
   close the Case. Thread-mode Cases do **not** use Drafts, and the configurable
   status set (`[case.status]`) attaches to the Case itself, so the Kanban board
   shows Cases. Actions are still available: they are managed from the Case
-  detail page, and their Slack notifications are quiet one-line replies in the
-  Case thread (see [Slack → Actions in thread mode](slack.md#actions-in-thread-mode)).
-  **Agent execution there is given no Action tools** — neither the investigation
-  agent nor Jobs can read or mutate Actions, and the Job system prompt omits the
-  Actions section. To compensate, a thread-mode Job's system prompt instead
+  detail page or by mentioning the bot in the Case thread, and their Slack
+  notifications are quiet one-line replies in the Case thread (see
+  [Slack → Actions in thread mode](slack.md#actions-in-thread-mode)). **Apart
+  from that mention agent, agent execution there is given no Action tools** —
+  Jobs and the workspace agent cannot read or mutate Actions, and the Job system
+  prompt omits the Actions section. To compensate, a thread-mode Job's system prompt instead
   embeds the thread's recent Slack messages — up to the newest 32 from the last
   24 hours, oldest first — so the Job agent can reason about the latest
   conversation; long messages are truncated (~140 characters, with the original

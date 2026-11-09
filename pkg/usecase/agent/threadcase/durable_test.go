@@ -701,6 +701,8 @@ func TestDurableCreateKeepsNoRunRecord(t *testing.T) {
 	sc := agentkernel.ScopeFrom(proc.Metadata)
 	gt.String(t, sc.JobRunID).Equal("")
 	gt.String(t, sc.EventType).Equal("")
+	// A create turn has no case whose Actions it could manage.
+	gt.Value(t, sc.ThreadModeActions).Equal(false)
 }
 
 // A second mention arriving while a turn is live must be refused as busy and name
@@ -795,6 +797,9 @@ func TestDurableRecordsTheActorAndScope(t *testing.T) {
 	gt.Value(t, proc.Agent).Equal(agentkernel.AgentCaseThread)
 	// An interactive turn must never queue behind a scheduled batch.
 	gt.Value(t, sc.SlotGated).Equal(false)
+	// A mention on an existing case may manage its Actions, so its scope lifts
+	// the thread-mode workspace's default of no Action tools.
+	gt.Value(t, sc.ThreadModeActions).Equal(true)
 }
 
 // A cross-channel reaction has two threads: the case lives in the monitored

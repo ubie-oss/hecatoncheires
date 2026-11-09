@@ -366,6 +366,9 @@ func (d *Durable) scope(ctx context.Context, req TurnRequest, isCreate bool) age
 	if req.Case != nil {
 		sc.CaseID = req.Case.ID
 		sc.PrivateCase = req.Case.IsPrivate
+		// A mention on an existing case may manage that case's Actions. Create
+		// and materialize turns keep the thread-mode default of no Action tools.
+		sc.ThreadModeActions = req.Mode == ModeMention
 	}
 	// A create turn keeps no run record; a mention turn gets its own fresh per-turn
 	// JobID, which is what keeps it out of the Automated Jobs list while still

@@ -433,8 +433,9 @@ Bot-authored triggers (an intake-form app's post or mention) start a Case only
 when `[slack] accept_bot = true`.
 
 Thread-mode Cases do **not** create Drafts. They do have Actions, managed from the
-Case detail page of the Web UI; their Slack notifications go into the Case thread
-and stay quiet (see [Actions in thread mode](#actions-in-thread-mode)). Jobs run
+Case detail page of the Web UI or by mentioning the bot in the Case thread ("add
+an action to …", "mark the … action done"); their Slack notifications go into the
+Case thread and stay quiet (see [Actions in thread mode](#actions-in-thread-mode)). Jobs run
 identically to channel mode and post their output into the Case thread.
 
 **Case changes are announced in the thread.** When a Case's title, assignees, or
