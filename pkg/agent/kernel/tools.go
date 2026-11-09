@@ -319,10 +319,10 @@ func buildToolSetDeps(d ToolDeps, sc Scope, entry *model.WorkspaceEntry, target 
 		}
 	}
 
-	// Actions exist only in channel-mode WORKSPACES. A thread-mode workspace
-	// tracks progress through the board status instead, and the usecase boundary
-	// rejects action writes there, so the whole core toolset is withheld rather
-	// than offered as tools that can only fail.
+	// Agents get Action tools only in channel-mode WORKSPACES. A thread-mode
+	// workspace's agents track progress through the board status, and its
+	// Actions are managed from the Web UI, so the whole core toolset is withheld
+	// there.
 	//
 	// The workspace's mode decides it, not the case's SlackThreadTS. The two are
 	// not equivalent: a thread-mode workspace can hold a case whose thread is not

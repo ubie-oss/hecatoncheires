@@ -432,8 +432,10 @@ the single channel named in `[slack] channel` and turns conversations into Cases
 Bot-authored triggers (an intake-form app's post or mention) start a Case only
 when `[slack] accept_bot = true`.
 
-Thread-mode Cases do **not** create Actions or Drafts. Jobs run identically to
-channel mode and post their output into the Case thread.
+Thread-mode Cases do **not** create Drafts. They do have Actions, managed from the
+Case detail page of the Web UI; their Slack notifications go into the Case thread
+and stay quiet (see [Actions in thread mode](#actions-in-thread-mode)). Jobs run
+identically to channel mode and post their output into the Case thread.
 
 **Case changes are announced in the thread.** When a Case's title, assignees, or
 board status changes — from the Web UI or from an agent tool — a single
@@ -472,8 +474,8 @@ The agent acts with the **mentioning user's** permissions, so it can only see an
 change Cases that user may access. It therefore runs only for a mention authored
 by a Slack user — an app-authored mention has no identity to act on behalf of.
 
-Available tools differ by mode: a thread-mode workspace has no Actions, so the
-agent gets no Action tools, and it finishes a Case by moving it to a closed board
+Available tools differ by mode: in a thread-mode workspace the agent gets no
+Action tools, and it finishes a Case by moving it to a closed board
 status rather than with a separate close tool. See
 [Agent tools → Workspace agent cross-case tools](agent_tools.md#workspace-agent-cross-case-tools-casemulti).
 
@@ -567,6 +569,37 @@ itself is never reproduced as a Slack message, and editing or deleting one
 posts nothing. See
 [docs/user_guide.md](./user_guide.md#slack-notification) for the message shape
 and the deep-link format.
+
+### Actions in thread mode
+
+A thread-mode Case has no channel of its own: its Slack conversation is one
+thread of the monitored channel, shared with the people discussing the Case. The
+Action card described above would put a large interactive message into that
+conversation for every Action, so thread-mode Actions use a quieter shape:
+
+- **Creating an Action** posts a single context-block reply in the Case thread,
+  in the same format as the change notifications:
+  `:heavy_plus_sign: @alice created action 📌 <link|Example action>`. There is
+  no card, no description, and no Status / Assignee select; status and assignee
+  are changed from the Web UI. The reply's timestamp is stored on the Action, so
+  it counts as posted (the "Post to Slack" button and
+  `diagnosis fix-unsent-action` only act on Actions that have none).
+- **Every later notification** — title / status / assignee change, step event,
+  comment, archive / unarchive — is likewise one context-block reply in the Case
+  thread. Because several Actions share that thread, each notification starts
+  with the Action it is about (`📌 <link|Example action>`), except the archive
+  notice, which already names it.
+- **Nothing is broadcast.** None of these replies uses `reply_broadcast` or the
+  channel notification slot, whatever `broadcastableActionEvents` says: the
+  monitored channel is shared by every Case of the workspace, so a channel-level
+  line would reach people watching unrelated threads.
+- Replies to these notices are not collected into the Action's Slack activity:
+  a thread reply cannot start a thread of its own, so they are simply part of
+  the Case thread.
+
+The routing is decided in one place, `resolveActionNotifyTarget` /
+`postActionNotice` (`pkg/usecase/action.go`), shared by the action, step and
+comment usecases.
 
 ### Interactivity Setup
 

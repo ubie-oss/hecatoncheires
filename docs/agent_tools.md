@@ -72,8 +72,8 @@ user cannot access are filtered from lists and rejected on direct access), and
 writes are subject to the workspace agent's [write guardrail](#guardrails)
 (nothing is changed unless the user explicitly asks).
 
-The set differs by case mode, because a thread-mode workspace has no Actions and
-closes a Case by moving it to a closed board status:
+The set differs by case mode, because the agents of a thread-mode workspace get
+no Action tools and it closes a Case by moving it to a closed board status:
 
 | Tool | R/W | Mode | Purpose | Notes |
 |------|-----|------|---------|-------|
@@ -85,7 +85,7 @@ closes a Case by moving it to a closed board status:
 | `case__unassign` | W | both | Remove assignee(s) from a case by delta (`case_id`, set difference). | Unknown ids are not rejected (a since-deleted user must stay removable). |
 | `case__close_case` | W | channel | Close a case (`case_id`). | Channel mode only — built when the workspace has **no** `CaseStatusSet`. |
 | `case__update_case_status` | W | thread | Move a case to another board status (`case_id`, `status`); a closed status closes it. | Thread mode only — the counterpart of `case__close_case`. The `status` parameter enumerates the configured status ids. The result carries `previous_board_status` and `changed`, as in the case-bound tool above. Exactly one "mark done" tool is offered per mode. |
-| `case__list_actions` | R | channel | List a case's actions (`case_id`). | Thread-mode workspaces manage no Actions, so none of the action tools are wired there. |
+| `case__list_actions` | R | channel | List a case's actions (`case_id`). | None of the action tools are wired in a thread-mode workspace. |
 | `case__get_action` | R | channel | Fetch one action (`case_id`, `action_id`). | Verifies the action belongs to the case. |
 | `case__create_action` | W | channel | Add an action to a case (`case_id`). | |
 | `case__update_action` | W | channel | Update an action (`case_id`, `action_id`). | Change attributed to the mentioning user. |
@@ -342,8 +342,9 @@ Notes:
   which is exactly why they are wired: a Job told to "read the thread first"
   must have a tool to do so, or it will misuse the post tool instead. (Source of
   truth for Job wiring: `buildJobTools` in `pkg/cli/job_runtime.go`.)
-- **Thread-mode** workspaces have no Actions, so the whole `core` / Action
-  surface is absent there.
+- **Thread-mode** workspaces get no `core` / Action tools at all. Their Actions
+  are managed from the Web UI; the thread-mode agents and Job prompt are built
+  around the Case board status instead.
 - **Proposal sub-agents** are read-only investigators: no case exists yet, so the
   draft is materialised by the host. **Thread-case mention sub-agents and Job
   (`planexec`) sub-agents may use write tools** to carry out the requested change
@@ -374,7 +375,7 @@ hard lock.
 | **A Job posts only to the case's bound Slack channel.** | Jobs | **Code.** The only Slack write tool a Job gets is `slack__post_to_case_channel`, hard-pinned to `Case.SlackChannelID`. |
 | **Knowledge stays out of shared storage for private cases.** | Mention agent & Jobs on a private case | **Code.** `knowledge__create_knowledge` / `knowledge__update_knowledge` / `knowledge__create_tag` / `knowledge__update_tag` / `knowledge__delete_tag` are withheld; only read tools remain. |
 | **A Job cannot read its own past run traces.** | Jobs | **Prompt.** Determine idempotency from the current case state, the action list, and Slack history — not from prior traces. |
-| **Actions exist only in channel-mode cases.** | All agent contexts | **Code, at the usecase boundary.** The action (`core__*`) tools are withheld from thread-mode in all hosts, *and* `ActionUseCase.CreateAction` / `UpdateAction` (reparent) reject a thread-mode parent (`ErrCaseThreadModeNoActions`) — so every entry point (GraphQL, Slack, agent, eval), not just the tool wiring, is covered. |
+| **Agents do not touch Actions in thread-mode workspaces.** | All agent contexts | **Code, at the tool wiring.** The action (`core__*`) tools and the cross-case action tools are withheld from thread-mode in all hosts. The usecase itself accepts Actions on a thread-mode Case — they are managed from the Web UI — so this is a tool-wiring guardrail only. |
 | **Case lifecycle changes follow the mode-specific path.** | All agent contexts | **Code, at the usecase boundary.** Thread-mode cases close/reopen only via board status (`UpdateCaseStatus`); `CloseCase` / `ReopenCase` reject thread-mode (`ErrCaseThreadModeUseStatus`), and `UpdateCaseStatus` rejects channel-mode — keeping `BoardStatus` and the lifecycle `Status` in sync. |
 
 When a guardrail is "prompt only", treat it as a firm design constraint: do not

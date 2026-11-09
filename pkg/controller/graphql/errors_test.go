@@ -27,7 +27,6 @@ func TestErrorCode(t *testing.T) {
 		{"case not draft (usecase)", goerr.Wrap(usecase.ErrCaseNotDraft, "x"), gqlctrl.ErrCodeInvalidStatusTransition},
 		{"case is draft", goerr.Wrap(usecase.ErrCaseIsDraft, "x"), gqlctrl.ErrCodeInvalidStatusTransition},
 		{"thread-mode lifecycle via status", goerr.Wrap(usecase.ErrCaseThreadModeUseStatus, "x"), gqlctrl.ErrCodeInvalidStatusTransition},
-		{"thread-mode case no actions", goerr.Wrap(usecase.ErrCaseThreadModeNoActions, "x"), gqlctrl.ErrCodeBadUserInput},
 		{"private case in thread mode", goerr.Wrap(usecase.ErrCasePrivateThreadModeUnsupported, "x"), gqlctrl.ErrCodeBadUserInput},
 		{"field validation failed", goerr.Wrap(usecase.ErrFieldValidationFailed, "x"), gqlctrl.ErrCodeFieldValidationFailed},
 		{"activation failed", goerr.Wrap(usecase.ErrActivationFailed, "x"), gqlctrl.ErrCodeActivationFailed},

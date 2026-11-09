@@ -864,8 +864,8 @@ prompt = "Prefer concise Japanese replies."
   config error); `prompt_file` is resolved relative to the config file's
   directory and behaves like a Job `prompt_file`. In channel mode the section
   requires `workspace_channel`; in thread mode it stands alone.
-- **Thread mode differences:** a thread-mode workspace has no Actions, so the
-  agent gets no Action tools, and it finishes a Case by moving it to a closed
+- **Thread mode differences:** the agent gets no Action tools in a thread-mode
+  workspace (Actions there are managed from the Web UI), and it finishes a Case by moving it to a closed
   board status (`case__update_case_status`) rather than with a separate close
   tool. In thread mode the agent runs on a channel-root mention **instead of**
   starting a Case there; Cases come from an @mention inside a thread. See

@@ -334,8 +334,8 @@ type ToolSetDeps struct {
 	CaseWrite casewriter.Deps
 
 	// OmitCore omits the core (action) toolset entirely. Set by thread-mode
-	// agents: a thread-mode workspace manages no Actions, so even the
-	// read-only list/get-action tools must not exist. Without this the
+	// agents: a thread-mode workspace's agents are given no Actions, so even
+	// the read-only list/get-action tools must not exist. Without this the
 	// resolver would always build them (they only need Repo), since the
 	// core read tools do not depend on ActionUC being wired.
 	OmitCore bool

@@ -15,6 +15,7 @@ const ACTION_FIELDS = `
     }
     slackChannelID
     slackChannelURL
+    slackThreadTS
   }
   title
   description

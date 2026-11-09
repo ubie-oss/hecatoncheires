@@ -225,8 +225,8 @@ export default function CaseDetail() {
   const slackChannelURL: string | null = c?.slackChannelURL || null
   const channelUserCount: number = c?.channelUserCount || 0
   // Thread-mode is a WORKSPACE property: in a thread-mode workspace every case
-  // uses the thread model (no Actions, a configurable board status, no
-  // lifecycle close button) regardless of the individual case's binding flag.
+  // uses the thread model (a configurable board status, no lifecycle close
+  // button, no Action board of its own) regardless of the individual case's binding flag.
   // We key the UI off the workspace mode, not the per-case isThreadBound, so a
   // case still renders thread-style even if its thread binding is missing.
   const threadMode = caseStatuses.isThreadMode
@@ -667,9 +667,6 @@ export default function CaseDetail() {
             />
           ))}
 
-          {/* Related Actions only exist for activated channel-mode cases.
-              Drafts have no actions yet, and thread-mode workspaces never
-              manage Actions at all — hide the entire section in both cases. */}
           {memoEnabled && (
           <section className="h-section">
             <div className="h-section-h">
@@ -683,7 +680,10 @@ export default function CaseDetail() {
           </section>
           )}
 
-          {c.status !== 'DRAFT' && !threadMode && (
+          {/* Related Actions exist for every activated case, in channel and
+              thread mode alike. Drafts have no actions yet, so the section is
+              hidden for them. */}
+          {c.status !== 'DRAFT' && (
           <section className="h-section">
             <div className="h-section-h">
               <span className="h-section-title">{t('sectionRelatedActions')}</span>
@@ -698,6 +698,9 @@ export default function CaseDetail() {
                 </>
               )}
               <span className="spacer" />
+              {/* A thread-mode workspace's /actions route is the Case board,
+                  not an Action board, so there is no action list to open. */}
+              {!threadMode && (
               <Button
                 size="sm"
                 variant="ghost"
@@ -707,6 +710,7 @@ export default function CaseDetail() {
               >
                 {t('linkOpenInActionList')}
               </Button>
+              )}
               {actionView === 'open' && (
                 <Button
                   size="sm"
