@@ -365,6 +365,21 @@ func TestWorkspaceEntry_SlackTeamID(t *testing.T) {
 	gt.Value(t, entry2.SlackTeamID).Equal("")
 }
 
+func TestWorkspaceEntry_AllowsMentionBot(t *testing.T) {
+	entry := &model.WorkspaceEntry{
+		Workspace:     model.Workspace{ID: "ws-1"},
+		MentionBotIDs: []string{"B0WORKFLOW1", "B0INTEGRATE2"},
+	}
+	gt.Bool(t, entry.AllowsMentionBot("B0WORKFLOW1")).True()
+	gt.Bool(t, entry.AllowsMentionBot("B0INTEGRATE2")).True()
+	gt.Bool(t, entry.AllowsMentionBot("B0OTHERAPP")).False()
+	gt.Bool(t, entry.AllowsMentionBot("")).False()
+
+	gt.Bool(t, (&model.WorkspaceEntry{}).AllowsMentionBot("B0WORKFLOW1")).False()
+	var nilEntry *model.WorkspaceEntry
+	gt.Bool(t, nilEntry.AllowsMentionBot("B0WORKFLOW1")).False()
+}
+
 func TestWorkspaceEntry_ActionsEnabled(t *testing.T) {
 	var unregistered *model.WorkspaceEntry
 	gt.Bool(t, unregistered.ActionsEnabled()).True()

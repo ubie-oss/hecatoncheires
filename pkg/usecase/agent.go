@@ -249,6 +249,19 @@ func (uc *AgentUseCase) HandleAgentMention(ctx context.Context, msg *slackmodel.
 	}
 	ctx = i18n.ContextWithWorkspaceLang(ctx, entry.Language)
 
+	// A mention an app posted (a Slack workflow, an integration bot) names no
+	// Slack user, so its turn acts as the case channel itself and may change
+	// this case. Only an app the operator listed in [slack] mention_bots may
+	// start one; any other is ignored. Its bot id is logged so an operator can
+	// find the id to list.
+	if msg.UserID() == "" && !entry.AllowsMentionBot(msg.BotID()) {
+		logger.Info("ignoring a case-channel mention from an app not listed in [slack] mention_bots",
+			"workspace_id", entry.Workspace.ID,
+			"channel_id", msg.ChannelID(),
+			"bot_id", msg.BotID())
+		return nil
+	}
+
 	// Determine thread parent TS. Slack stores thread replies under their
 	// parent's `ts`; for a top-level mention we treat the mention itself as
 	// the parent so subsequent replies hang off it.
@@ -311,6 +324,7 @@ func (uc *AgentUseCase) HandleAgentMention(ctx context.Context, msg *slackmodel.
 		MentionTS:      msg.ID(),
 		MentionText:    msg.Text(),
 		MentionUserID:  msg.UserID(),
+		MentionBotID:   msg.BotID(),
 		BotUserID:      botUserID,
 		Workspace:      entry,
 		Case:           foundCase,

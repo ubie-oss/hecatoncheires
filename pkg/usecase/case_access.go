@@ -19,6 +19,20 @@ func tokenActor(ctx context.Context) (actorID string, checkAccess bool) {
 	return "", false
 }
 
+// tokenUserID returns the actor the context auth token names, for
+// ATTRIBUTION — a "<@U...>" change line, a "created by" record. It is "" when
+// there is no token, and also when the token names a case channel
+// (model.CaseChannelActorID): that actor is not a person, so its changes are
+// attributed to the system. Access control must keep using the token's Sub as
+// is (tokenActor).
+func tokenUserID(ctx context.Context) string {
+	token, err := auth.TokenFromContext(ctx)
+	if err != nil || model.IsCaseChannelActor(token.Sub) {
+		return ""
+	}
+	return token.Sub
+}
+
 // assertCaseWriteAccess is the single gate enforcing private-Case write access
 // control against an already-loaded Case. Every Case write path funnels its
 // access check through here so a new write path cannot structurally miss it.

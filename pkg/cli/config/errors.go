@@ -67,6 +67,9 @@ var (
 	// the agent runs in the workspace channel and is meaningless without it. In
 	// thread mode the section stands alone (the monitored channel hosts it).
 	ErrMissingWorkspaceChannel = goerr.New("[slack.workspace_agent] requires [slack] workspace_channel")
+	// ErrInvalidMentionBot is returned when an entry of [slack] mention_bots is
+	// not a Slack bot id (e.g. an app id or a bot user id).
+	ErrInvalidMentionBot = goerr.New("invalid Slack bot id in mention_bots")
 	// ErrInvalidWorkspaceChannel is returned when [slack] workspace_channel is not
 	// a Slack channel ID (e.g. a channel name).
 	ErrInvalidWorkspaceChannel = goerr.New("invalid Slack workspace_channel ID")

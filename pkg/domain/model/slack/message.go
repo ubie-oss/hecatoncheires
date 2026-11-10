@@ -16,6 +16,7 @@ type Message struct {
 	teamID    string
 	userID    string
 	userName  string
+	botID     string
 	text      string
 	eventTS   string
 	files     []File
@@ -41,6 +42,21 @@ func (m *Message) TeamID() string {
 
 func (m *Message) UserID() string {
 	return m.userID
+}
+
+// BotID is the Slack bot id of the app that posted the message (a Slack
+// workflow, an integration bot), empty for a post by a person.
+func (m *Message) BotID() string {
+	return m.botID
+}
+
+// WithBotID returns a copy of the message attributed to the app with Slack bot
+// id botID. The receiver is left unchanged.
+func (m *Message) WithBotID(botID string) *Message {
+	c := *m
+	c.files = append([]File(nil), m.files...)
+	c.botID = botID
+	return &c
 }
 
 func (m *Message) UserName() string {

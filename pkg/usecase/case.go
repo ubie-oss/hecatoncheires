@@ -87,10 +87,7 @@ func (uc *CaseUseCase) publishLifecycle(ctx context.Context, workspaceID string,
 	if uc == nil || uc.eventPublisher == nil || c == nil {
 		return
 	}
-	actor := ""
-	if tok, err := auth.TokenFromContext(ctx); err == nil {
-		actor = tok.Sub
-	}
+	actor := tokenUserID(ctx)
 	uc.eventPublisher.PublishCaseLifecycle(ctx, workspaceID, c, lifecycle, actor)
 }
 
@@ -1161,10 +1158,7 @@ func (uc *CaseUseCase) UpdateCase(ctx context.Context, workspaceID string, id in
 	// Tell the thread that the title moved. Only a real change is announced, so
 	// a re-submit of the same title stays silent.
 	if patch.Title != nil && beforeTitle != updated.Title {
-		actor := i18n.T(ctx, i18n.MsgChangeActorSystem)
-		if tok, terr := auth.TokenFromContext(ctx); terr == nil && tok.Sub != "" {
-			actor = mentionUser(tok.Sub)
-		}
+		actor := uc.changeActor(ctx)
 		uc.postThreadContextLine(ctx, updated,
 			i18n.T(ctx, i18n.MsgCaseChangeTitle, actor, beforeTitle, updated.Title))
 	}
@@ -1230,10 +1224,7 @@ func (uc *CaseUseCase) AssignCase(ctx context.Context, workspaceID string, id in
 	// written, so a concurrent assign of the same user cannot make this announce
 	// a change it did not make.
 	if len(added) > 0 {
-		actor := i18n.T(ctx, i18n.MsgChangeActorSystem)
-		if tok, terr := auth.TokenFromContext(ctx); terr == nil && tok.Sub != "" {
-			actor = mentionUser(tok.Sub)
-		}
+		actor := uc.changeActor(ctx)
 		mentions := make([]string, 0, len(added))
 		for _, uid := range added {
 			mentions = append(mentions, mentionUser(uid))
@@ -1283,10 +1274,7 @@ func (uc *CaseUseCase) UnassignCase(ctx context.Context, workspaceID string, id 
 	// Mirror of AssignCase: the diff comes from inside the transaction, so
 	// unassigning someone another request already removed stays silent.
 	if len(removed) > 0 {
-		actor := i18n.T(ctx, i18n.MsgChangeActorSystem)
-		if tok, terr := auth.TokenFromContext(ctx); terr == nil && tok.Sub != "" {
-			actor = mentionUser(tok.Sub)
-		}
+		actor := uc.changeActor(ctx)
 		mentions := make([]string, 0, len(removed))
 		for _, uid := range removed {
 			mentions = append(mentions, mentionUser(uid))
@@ -1905,8 +1893,8 @@ func (uc *CaseUseCase) UnarchiveCase(ctx context.Context, workspaceID string, id
 // a Slack mention when the context carries an auth token, the localized
 // "system" label otherwise. Matches what UpdateCase / UpdateCaseStatus do.
 func (uc *CaseUseCase) changeActor(ctx context.Context) string {
-	if tok, err := auth.TokenFromContext(ctx); err == nil && tok.Sub != "" {
-		return mentionUser(tok.Sub)
+	if userID := tokenUserID(ctx); userID != "" {
+		return mentionUser(userID)
 	}
 	return i18n.T(ctx, i18n.MsgChangeActorSystem)
 }
@@ -2207,10 +2195,7 @@ func (uc *CaseUseCase) UpdateCaseStatus(ctx context.Context, workspaceID string,
 	// that was written, so a concurrent move of the same case cannot make this
 	// announce a transition it did not make.
 	if beforeStatus != updated.BoardStatus {
-		actor := i18n.T(ctx, i18n.MsgChangeActorSystem)
-		if tok, terr := auth.TokenFromContext(ctx); terr == nil && tok.Sub != "" {
-			actor = mentionUser(tok.Sub)
-		}
+		actor := uc.changeActor(ctx)
 		// Report the configured display name, not the raw board status id. An id
 		// the set no longer defines (left over from a config change) falls back to
 		// the id itself, and an unset board status to an em dash.
