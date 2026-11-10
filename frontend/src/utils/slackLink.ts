@@ -7,20 +7,29 @@
 // workspace unambiguously.
 
 // buildSlackPermalink composes a permalink to a specific message in a channel.
+// When the message is a reply inside a thread, pass the thread's root
+// timestamp as threadTS: Slack then opens the reply within its thread instead
+// of looking for it at the channel root.
 export function buildSlackPermalink(
   channelURL: string | null | undefined,
   channelID: string | null | undefined,
   ts: string | null | undefined,
+  threadTS?: string | null,
 ): string | null {
   if (!ts) return null
   const tsCompact = ts.replace('.', '')
+  let base: string
   if (channelURL) {
-    return `${trimTrailingSlash(channelURL)}/p${tsCompact}`
+    base = `${trimTrailingSlash(channelURL)}/p${tsCompact}`
+  } else if (channelID) {
+    base = `https://slack.com/archives/${channelID}/p${tsCompact}`
+  } else {
+    return null
   }
-  if (channelID) {
-    return `https://slack.com/archives/${channelID}/p${tsCompact}`
-  }
-  return null
+  if (!threadTS || threadTS === ts) return base
+  const params = new URLSearchParams({ thread_ts: threadTS })
+  if (channelID) params.set('cid', channelID)
+  return `${base}?${params.toString()}`
 }
 
 // buildSlackCaseLink composes the link that represents a Case in Slack.

@@ -13,6 +13,7 @@ import (
 
 	"github.com/m-mizutani/hecatoncheires/pkg/agent/slackfmt"
 	"github.com/m-mizutani/hecatoncheires/pkg/domain/model"
+	"github.com/m-mizutani/hecatoncheires/pkg/domain/model/config"
 	"github.com/m-mizutani/hecatoncheires/pkg/domain/semantic"
 	"github.com/m-mizutani/hecatoncheires/pkg/domain/types"
 	"github.com/m-mizutani/hecatoncheires/pkg/usecase/agent"
@@ -65,6 +66,21 @@ type systemPromptInput struct {
 	WorkspacePrompt string
 	// TriggerContext is rendered in ModeCreate only.
 	TriggerContext string
+	// ManagesActions is set in ModeMention when the workspace enables Actions
+	// on thread-mode cases ([case] actions). It must follow the same switch as
+	// the turn's Scope.ThreadModeActions, which is what actually hands the
+	// sub-agents the core__* tools the prompt then describes.
+	ManagesActions bool
+	// Memos is set in ModeMention when the workspace enables memos; the
+	// memo__* tools reach the turn's sub-agents exactly then.
+	Memos *systemPromptMemos
+}
+
+// systemPromptMemos describes the workspace's memos to a mention turn: what a
+// memo is for, and the field ids memo__apply_memo_changes takes.
+type systemPromptMemos struct {
+	Definition string
+	Fields     []systemPromptField
 }
 
 type systemPromptCase struct {
@@ -162,24 +178,7 @@ func buildSystemPrompt(c *model.Case, ws *model.WorkspaceEntry, mode Mode, creat
 	}
 
 	if ws != nil && ws.FieldSchema != nil {
-		for _, f := range ws.FieldSchema.Fields {
-			opts := make([]string, 0, len(f.Options))
-			for _, o := range f.Options {
-				opts = append(opts, o.ID)
-			}
-			in.Fields = append(in.Fields, systemPromptField{
-				Name:         f.Name,
-				ID:           f.ID,
-				Type:         string(f.Type),
-				Required:     f.Required,
-				Description:  f.Description,
-				Options:      strings.Join(opts, ", "),
-				IsDate:       f.Type == types.FieldTypeDate,
-				Semantic:     string(f.Semantic),
-				SemanticHint: semantic.PromptHint(f.Semantic),
-				Pattern:      f.Validation.Pattern.Label(),
-			})
-		}
+		in.Fields = systemPromptFields(ws.FieldSchema.Fields)
 	}
 
 	if ws != nil && ws.CaseStatusSet != nil {
@@ -199,6 +198,13 @@ func buildSystemPrompt(c *model.Case, ws *model.WorkspaceEntry, mode Mode, creat
 	}
 
 	if mode == ModeMention && ws != nil {
+		in.ManagesActions = ws.ActionsEnabled()
+		if ws.MemoConfig.Enabled() {
+			in.Memos = &systemPromptMemos{
+				Definition: strings.TrimSpace(ws.MemoConfig.Description),
+				Fields:     systemPromptFields(ws.MemoConfig.FieldSchema.Fields),
+			}
+		}
 		in.WorkspaceDescription = strings.TrimSpace(ws.Workspace.Description)
 		// Workspace-specific instructions from TOML [case.prompts].mention.
 		if strings.TrimSpace(ws.CaseMentionPrompt) != "" {
@@ -280,4 +286,29 @@ func orPlaceholder(s string) string {
 		return "(empty)"
 	}
 	return s
+}
+
+// systemPromptFields renders a field schema for the prompt. The case fields and
+// the memo fields share it, so the two read the same way.
+func systemPromptFields(fields []config.FieldDefinition) []systemPromptField {
+	out := make([]systemPromptField, 0, len(fields))
+	for _, f := range fields {
+		opts := make([]string, 0, len(f.Options))
+		for _, o := range f.Options {
+			opts = append(opts, o.ID)
+		}
+		out = append(out, systemPromptField{
+			Name:         f.Name,
+			ID:           f.ID,
+			Type:         string(f.Type),
+			Required:     f.Required,
+			Description:  f.Description,
+			Options:      strings.Join(opts, ", "),
+			IsDate:       f.Type == types.FieldTypeDate,
+			Semantic:     string(f.Semantic),
+			SemanticHint: semantic.PromptHint(f.Semantic),
+			Pattern:      f.Validation.Pattern.Label(),
+		})
+	}
+	return out
 }

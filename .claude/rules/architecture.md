@@ -452,7 +452,9 @@ Slack tool it did have (the poster).
   wired via the `usecase` options in `pkg/cli/serve.go`. A tool that exists
   for one host but not another is a bug unless there is a documented reason.
 - **Non-Action tools default to both channel-mode and thread-mode.** Only
-  Action / `core` tools are mode-gated (Actions exist only in channel-mode).
+  Action / `core` tools are mode-gated (withheld in thread-mode workspaces
+  except from the thread-case mention turn of a workspace with
+  `[case] actions = true`, whose scope sets `Scope.ThreadModeActions`).
   Read-only and auxiliary tools (Slack read, Notion, web fetch, knowledge,
   memo) are wired in both modes unless a specific, recorded reason excludes
   them.

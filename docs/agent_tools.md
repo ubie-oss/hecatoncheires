@@ -72,8 +72,8 @@ user cannot access are filtered from lists and rejected on direct access), and
 writes are subject to the workspace agent's [write guardrail](#guardrails)
 (nothing is changed unless the user explicitly asks).
 
-The set differs by case mode, because a thread-mode workspace has no Actions and
-closes a Case by moving it to a closed board status:
+The set differs by case mode, because the agents of a thread-mode workspace get
+no Action tools and it closes a Case by moving it to a closed board status:
 
 | Tool | R/W | Mode | Purpose | Notes |
 |------|-----|------|---------|-------|
@@ -85,7 +85,7 @@ closes a Case by moving it to a closed board status:
 | `case__unassign` | W | both | Remove assignee(s) from a case by delta (`case_id`, set difference). | Unknown ids are not rejected (a since-deleted user must stay removable). |
 | `case__close_case` | W | channel | Close a case (`case_id`). | Channel mode only — built when the workspace has **no** `CaseStatusSet`. |
 | `case__update_case_status` | W | thread | Move a case to another board status (`case_id`, `status`); a closed status closes it. | Thread mode only — the counterpart of `case__close_case`. The `status` parameter enumerates the configured status ids. The result carries `previous_board_status` and `changed`, as in the case-bound tool above. Exactly one "mark done" tool is offered per mode. |
-| `case__list_actions` | R | channel | List a case's actions (`case_id`). | Thread-mode workspaces manage no Actions, so none of the action tools are wired there. |
+| `case__list_actions` | R | channel | List a case's actions (`case_id`). | The workspace agent gets none of the action tools in a thread-mode workspace. |
 | `case__get_action` | R | channel | Fetch one action (`case_id`, `action_id`). | Verifies the action belongs to the case. |
 | `case__create_action` | W | channel | Add an action to a case (`case_id`). | |
 | `case__update_action` | W | channel | Update an action (`case_id`, `action_id`). | Change attributed to the mentioning user. |
@@ -301,7 +301,7 @@ the mention agent close a case?" (yes — see [Guardrails](#guardrails)).
 
 | Tool group | Mention agent (channel-mode case) | `assist` batch | Job — channel-mode | Job — thread-mode | Thread-case investigation | Proposal sub-agent (case draft) |
 |------------|:---:|:---:|:---:|:---:|:---:|:---:|
-| `core` read + Actions (`actionwriter`) | ✓ (full, incl. archive / delete-step) | ✓ (full) | ✓ (Job subset, no archive / delete-step) | — (thread mode has no Actions) | — | read-only `core__list_actions` / `core__get_action` |
+| `core` read + Actions (`actionwriter`) | ✓ (full, incl. archive / delete-step) | ✓ (full) | ✓ (Job subset, no archive / delete-step) | — | ✓ (full, mention turns of a workspace with `[case] actions = true` only; the planner reads, its tasks write) | read-only `core__list_actions` / `core__get_action` |
 | `case__*` (casewriter) | ✓ | — | ✓ | ✓ | ✓ (mention turns only; no case exists on a create turn) | — (no case exists yet) |
 | `slack__search_messages`, `slack__get_messages` (read) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `slack__post_message` | — | ✓ (pinned to the case channel) | — | — | — | — |
@@ -311,7 +311,7 @@ the mention agent close a case?" (yes — see [Guardrails](#guardrails)).
 | `jira_*` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `webfetch` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `knowledge__*` (incl. tag CRUD) | ✓ (write if case is non-private) | — | ✓ (write if case is non-private) | ✓ (write if case is non-private) | read-only | read-only |
-| `memo__*` | ✓ (if memos enabled) | — | ✓ (if memos enabled) | ✓ (if memos enabled) | — | — |
+| `memo__*` | ✓ (if memos enabled) | — | ✓ (if memos enabled) | ✓ (if memos enabled) | ✓ (if memos enabled; mention turns only, the planner reads, its tasks write) | — |
 | `wsmeta` | — | — | — | — | — | ✓ (and the planner itself) |
 
 Notes:
@@ -342,8 +342,14 @@ Notes:
   which is exactly why they are wired: a Job told to "read the thread first"
   must have a tool to do so, or it will misuse the post tool instead. (Source of
   truth for Job wiring: `buildJobTools` in `pkg/cli/job_runtime.go`.)
-- **Thread-mode** workspaces have no Actions, so the whole `core` / Action
-  surface is absent there.
+- **Thread-mode** workspaces give the `core` / Action tools to one agent only,
+  and only when the workspace sets `[case] actions = true` (off by default):
+  the thread-case agent on a **mention** turn, whose scope then sets
+  `Scope.ThreadModeActions` (inherited by its sub-agents). Its planner gets the
+  reads (`core_ro`) and plans writes as tasks carrying `core`. Create and
+  materialize turns, Jobs and the workspace agent get none: their prompts are
+  built around the Case board status, and the kernel withholds the toolset
+  (`ToolSetDeps.OmitCore`) for any run whose scope does not grant it.
 - **Proposal sub-agents** are read-only investigators: no case exists yet, so the
   draft is materialised by the host. **Thread-case mention sub-agents and Job
   (`planexec`) sub-agents may use write tools** to carry out the requested change
@@ -374,7 +380,7 @@ hard lock.
 | **A Job posts only to the case's bound Slack channel.** | Jobs | **Code.** The only Slack write tool a Job gets is `slack__post_to_case_channel`, hard-pinned to `Case.SlackChannelID`. |
 | **Knowledge stays out of shared storage for private cases.** | Mention agent & Jobs on a private case | **Code.** `knowledge__create_knowledge` / `knowledge__update_knowledge` / `knowledge__create_tag` / `knowledge__update_tag` / `knowledge__delete_tag` are withheld; only read tools remain. |
 | **A Job cannot read its own past run traces.** | Jobs | **Prompt.** Determine idempotency from the current case state, the action list, and Slack history — not from prior traces. |
-| **Actions exist only in channel-mode cases.** | All agent contexts | **Code, at the usecase boundary.** The action (`core__*`) tools are withheld from thread-mode in all hosts, *and* `ActionUseCase.CreateAction` / `UpdateAction` (reparent) reject a thread-mode parent (`ErrCaseThreadModeNoActions`) — so every entry point (GraphQL, Slack, agent, eval), not just the tool wiring, is covered. |
+| **In a thread-mode workspace only the mention agent touches Actions.** | Thread-mode create / materialize turns, Jobs, the workspace agent | **Code, at the tool wiring.** The kernel withholds the action (`core__*`) tools from every run on a thread-mode workspace whose scope does not set `ThreadModeActions`, and the workspace agent gets no cross-case action tools there. Only the thread-case mention turn sets it, and only on a workspace with `[case] actions = true` (off by default). The usecase itself accepts Actions on a thread-mode Case, so this is a tool-wiring guardrail only. |
 | **Case lifecycle changes follow the mode-specific path.** | All agent contexts | **Code, at the usecase boundary.** Thread-mode cases close/reopen only via board status (`UpdateCaseStatus`); `CloseCase` / `ReopenCase` reject thread-mode (`ErrCaseThreadModeUseStatus`), and `UpdateCaseStatus` rejects channel-mode — keeping `BoardStatus` and the lifecycle `Status` in sync. |
 
 When a guardrail is "prompt only", treat it as a firm design constraint: do not

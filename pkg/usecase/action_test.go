@@ -96,12 +96,37 @@ func TestActionUseCase_CreateAction(t *testing.T) {
 		gt.Value(t, created.Status).Equal(types.ActionStatusBacklog)
 	})
 
-	t.Run("create action in a thread-mode case is rejected", func(t *testing.T) {
-		// Thread-mode cases have no Actions (progress is tracked via board
-		// status). The usecase boundary refuses the write so every entry point
-		// is covered, not just the agent tool wiring.
+	t.Run("create action in a thread-mode case is rejected by default", func(t *testing.T) {
+		// [case] actions defaults to off, so an existing thread-mode workspace
+		// keeps having no actions. With no registry the case's thread binding
+		// stands in for the mode and the default applies too.
+		for name, registry := range map[string]*model.WorkspaceRegistry{
+			"actions off": threadModeActionsRegistry(false),
+			"no registry": nil,
+		} {
+			t.Run(name, func(t *testing.T) {
+				repo := memory.New()
+				slackFake := &threadModeSlackFake{}
+				actionUC := usecase.NewActionUseCase(repo, registry, slackFake, "", nil)
+				ctx := auth.ContextWithToken(context.Background(), &auth.Token{Sub: "UTESTUSER"})
+				c := newThreadModeCase(t, repo)
+
+				_, err := actionUC.CreateAction(ctx, testWorkspaceID, c.ID, "Test Action", "", "", "", "", nil)
+				gt.Error(t, err).Is(usecase.ErrCaseActionsDisabled)
+
+				actions, err := repo.Action().GetByCase(ctx, testWorkspaceID, c.ID, interfaces.ActionListOptions{})
+				gt.NoError(t, err).Required()
+				gt.Array(t, actions).Length(0)
+				gt.Array(t, slackFake.threadCalls).Length(0)
+			})
+		}
+	})
+
+	t.Run("create action in a thread-mode case is accepted when the workspace enables actions", func(t *testing.T) {
+		// With [case] actions on, a thread-mode case takes actions like any
+		// other case.
 		repo := memory.New()
-		actionUC := usecase.NewActionUseCase(repo, nil, nil, "", nil)
+		actionUC := usecase.NewActionUseCase(repo, threadModeActionsRegistry(true), nil, "", nil)
 		ctx := auth.ContextWithToken(context.Background(), &auth.Token{Sub: "UTESTUSER"})
 
 		threadCase, err := repo.Case().Create(ctx, testWorkspaceID, &model.Case{
@@ -113,13 +138,17 @@ func TestActionUseCase_CreateAction(t *testing.T) {
 		})
 		gt.NoError(t, err).Required()
 
-		_, err = actionUC.CreateAction(ctx, testWorkspaceID, threadCase.ID, "Test Action", "Description", "", "", types.ActionStatusTodo, nil)
-		gt.Error(t, err).Is(usecase.ErrCaseThreadModeNoActions)
+		created, err := actionUC.CreateAction(ctx, testWorkspaceID, threadCase.ID, "Test Action", "Description", "U001", "", types.ActionStatusTodo, nil)
+		gt.NoError(t, err).Required()
 
-		// No action must have been persisted.
 		actions, err := repo.Action().GetByCase(ctx, testWorkspaceID, threadCase.ID, interfaces.ActionListOptions{})
 		gt.NoError(t, err).Required()
-		gt.Array(t, actions).Length(0)
+		gt.Array(t, actions).Length(1).Required()
+		gt.Value(t, actions[0].ID).Equal(created.ID)
+		gt.Value(t, actions[0].Title).Equal("Test Action")
+		gt.Value(t, actions[0].Description).Equal("Description")
+		gt.Value(t, actions[0].AssigneeID).Equal("U001")
+		gt.Value(t, actions[0].Status).Equal(types.ActionStatusTodo)
 	})
 }
 
@@ -296,12 +325,34 @@ func TestActionUseCase_UpdateAction(t *testing.T) {
 		gt.Error(t, err).Is(usecase.ErrActionNotFound)
 	})
 
-	t.Run("reparenting an action into a thread-mode case is rejected", func(t *testing.T) {
-		// The reparent path must enforce the same invariant as CreateAction:
-		// an action cannot be moved into a thread-mode case, which has no Actions.
+	t.Run("reparenting an action into a thread-mode case is rejected by default", func(t *testing.T) {
+		repo := memory.New()
+		actionUC := usecase.NewActionUseCase(repo, nil, nil, "", nil)
+		ctx := auth.ContextWithToken(context.Background(), &auth.Token{Sub: "UTESTUSER"})
+
+		channelCase, err := repo.Case().Create(ctx, testWorkspaceID, &model.Case{
+			Title: "Channel case", Status: types.CaseStatusOpen, ReporterID: "UTESTUSER",
+		})
+		gt.NoError(t, err).Required()
+		threadCase := newThreadModeCase(t, repo)
+
+		created, err := actionUC.CreateAction(ctx, testWorkspaceID, channelCase.ID, "Test Action", "", "", "", "", nil)
+		gt.NoError(t, err).Required()
+
+		_, err = actionUC.UpdateAction(ctx, testWorkspaceID, usecase.UpdateActionInput{
+			ID: created.ID, CaseID: &threadCase.ID, SlackSync: usecase.SlackSyncSkip,
+		})
+		gt.Error(t, err).Is(usecase.ErrCaseActionsDisabled)
+
+		got, err := repo.Action().Get(ctx, testWorkspaceID, created.ID)
+		gt.NoError(t, err).Required()
+		gt.Value(t, got.CaseID).Equal(channelCase.ID)
+	})
+
+	t.Run("reparenting an action into a thread-mode case is accepted when the workspace enables actions", func(t *testing.T) {
 		repo := memory.New()
 		caseUC := usecase.NewCaseUseCase(repo, nil, nil, nil, "")
-		actionUC := usecase.NewActionUseCase(repo, nil, nil, "", nil)
+		actionUC := usecase.NewActionUseCase(repo, threadModeActionsRegistry(true), nil, "", nil)
 		ctx := auth.ContextWithToken(context.Background(), &auth.Token{Sub: "UTESTUSER"})
 
 		channelCase, err := caseUC.CreateCase(ctx, testWorkspaceID, "Channel Case", "Description", []string{}, nil, false, false, "", "")
@@ -322,12 +373,11 @@ func TestActionUseCase_UpdateAction(t *testing.T) {
 		_, err = actionUC.UpdateAction(ctx, testWorkspaceID, usecase.UpdateActionInput{
 			ID: created.ID, CaseID: &threadCase.ID, SlackSync: usecase.SlackSyncSkip,
 		})
-		gt.Error(t, err).Is(usecase.ErrCaseThreadModeNoActions)
+		gt.NoError(t, err).Required()
 
-		// The action must stay under its original channel-mode case.
 		got, err := repo.Action().Get(ctx, testWorkspaceID, created.ID)
 		gt.NoError(t, err).Required()
-		gt.Value(t, got.CaseID).Equal(channelCase.ID)
+		gt.Value(t, got.CaseID).Equal(threadCase.ID)
 	})
 
 	t.Run("updating an archived action preserves ArchivedAt", func(t *testing.T) {
@@ -2179,5 +2229,232 @@ func TestActorForAccess(t *testing.T) {
 		id, check := usecase.ActorForAccessForTest(context.Background(), usecase.ActorRef{Kind: usecase.ActorKindSystem})
 		gt.String(t, id).Equal("")
 		gt.Bool(t, check).False()
+	})
+}
+
+// threadModeSlackCall is one PostThreadMessage recorded by threadModeSlackFake.
+type threadModeSlackCall struct {
+	channelID string
+	threadTS  string
+	text      string
+	blocks    []goslack.Block
+	broadcast bool
+}
+
+// threadModeSlackFake records every thread reply, channel-root post and card
+// update so the thread-mode tests can assert where each notification went.
+type threadModeSlackFake struct {
+	mockSlackService
+	threadCalls     []threadModeSlackCall
+	cardPosts       []string // channel IDs passed to PostMessageWithAttachment
+	cardUpdates     []string // message timestamps passed to UpdateMessageWithAttachment
+	nextThreadReply int
+}
+
+func (f *threadModeSlackFake) PostThreadMessage(_ context.Context, channelID, threadTS string, blocks []goslack.Block, text string, opts ...slacksvc.PostThreadOption) (string, error) {
+	cfg := slacksvc.ApplyPostThreadOptions(opts...)
+	f.threadCalls = append(f.threadCalls, threadModeSlackCall{
+		channelID: channelID, threadTS: threadTS, text: text, blocks: blocks, broadcast: cfg.Broadcast,
+	})
+	f.nextThreadReply++
+	return fmt.Sprintf("1700000001.%06d", f.nextThreadReply), nil
+}
+
+func (f *threadModeSlackFake) PostMessageWithAttachment(_ context.Context, channelID, _ string, _ goslack.Attachment) (string, error) {
+	f.cardPosts = append(f.cardPosts, channelID)
+	return "1700000002.000001", nil
+}
+
+func (f *threadModeSlackFake) UpdateMessageWithAttachment(_ context.Context, _, timestamp, _ string, _ goslack.Attachment) error {
+	f.cardUpdates = append(f.cardUpdates, timestamp)
+	return nil
+}
+
+// threadModeActionsRegistry registers testWorkspaceID as a thread-mode
+// workspace with [case] actions on (enabled) or left at its default (off).
+func threadModeActionsRegistry(enabled bool) *model.WorkspaceRegistry {
+	r := model.NewWorkspaceRegistry()
+	r.Register(&model.WorkspaceEntry{
+		Workspace:   model.Workspace{ID: testWorkspaceID, Name: "Thread workspace"},
+		CaseMode:    model.CaseModeThread,
+		CaseActions: enabled,
+	})
+	return r
+}
+
+const (
+	threadModeChannelID = "CTHREADMODE"
+	threadModeThreadTS  = "1700000000.000500"
+)
+
+// newThreadModeCase persists an OPEN thread-mode case bound to
+// threadModeChannelID / threadModeThreadTS.
+func newThreadModeCase(t *testing.T, repo *memory.Repository) *model.Case {
+	t.Helper()
+	c, err := repo.Case().Create(context.Background(), testWorkspaceID, &model.Case{
+		Title:          "Thread case",
+		Status:         types.CaseStatusOpen,
+		SlackChannelID: threadModeChannelID,
+		SlackThreadTS:  threadModeThreadTS,
+		BoardStatus:    "in_progress",
+	})
+	gt.NoError(t, err).Required()
+	return c
+}
+
+// assertQuietCaseThreadReply checks that call is a single context block posted
+// as a reply in the thread-mode case's thread and not broadcast to the channel.
+func assertQuietCaseThreadReply(t *testing.T, call threadModeSlackCall) {
+	t.Helper()
+	gt.Value(t, call.channelID).Equal(threadModeChannelID)
+	gt.Value(t, call.threadTS).Equal(threadModeThreadTS)
+	gt.Bool(t, call.broadcast).False()
+	gt.Array(t, call.blocks).Length(1).Required()
+	gt.Value(t, call.blocks[0].BlockType()).Equal(goslack.MBTContext)
+}
+
+func TestActionUseCase_ThreadModeSlackNotifications(t *testing.T) {
+	i18n.Init(i18n.LangEN)
+
+	t.Run("creating an action posts a one-line notice in the case thread instead of a card", func(t *testing.T) {
+		repo := memory.New()
+		fake := &threadModeSlackFake{}
+		actionUC := usecase.NewActionUseCase(repo, threadModeActionsRegistry(true), fake, "https://example.com", nil)
+		ctx := auth.ContextWithToken(context.Background(), &auth.Token{Sub: "UCREATOR"})
+		c := newThreadModeCase(t, repo)
+
+		created, err := actionUC.CreateAction(ctx, testWorkspaceID, c.ID, "Sample action", "Long description", "U001", "", types.ActionStatusTodo, nil)
+		gt.NoError(t, err).Required()
+
+		gt.Array(t, fake.cardPosts).Length(0)
+		gt.Array(t, fake.postedChannelIDs).Length(0)
+		gt.Array(t, fake.threadCalls).Length(1).Required()
+		call := fake.threadCalls[0]
+		assertQuietCaseThreadReply(t, call)
+		wantURL := fmt.Sprintf("https://example.com/ws/%s/cases/%d/actions/%d", testWorkspaceID, c.ID, created.ID)
+		gt.Value(t, call.text).Equal(fmt.Sprintf(":heavy_plus_sign: <@UCREATOR> created action 📌 *<%s|Sample action>*", wantURL))
+		// The description stays out of the notice: it is a single line.
+		gt.Bool(t, strings.Contains(call.text, "Long description")).False()
+
+		// The notice timestamp is recorded so the action counts as posted.
+		gt.Value(t, created.SlackMessageTS).Equal("1700000001.000001")
+		stored, err := repo.Action().Get(ctx, testWorkspaceID, created.ID)
+		gt.NoError(t, err).Required()
+		gt.Value(t, stored.SlackMessageTS).Equal("1700000001.000001")
+	})
+
+	t.Run("an action created without a user token is attributed to the system", func(t *testing.T) {
+		repo := memory.New()
+		fake := &threadModeSlackFake{}
+		actionUC := usecase.NewActionUseCase(repo, threadModeActionsRegistry(true), fake, "", nil)
+		c := newThreadModeCase(t, repo)
+
+		_, err := actionUC.CreateAction(context.Background(), testWorkspaceID, c.ID, "a&b<c>", "", "", "", "", nil)
+		gt.NoError(t, err).Required()
+
+		gt.Array(t, fake.threadCalls).Length(1).Required()
+		gt.Value(t, fake.threadCalls[0].text).Equal(":heavy_plus_sign: system created action 📌 *a&amp;b&lt;c&gt;*")
+	})
+
+	t.Run("updating an action posts a quiet notice naming the action and refreshes no card", func(t *testing.T) {
+		repo := memory.New()
+		fake := &threadModeSlackFake{}
+		slot := usecase.NewNotificationSlotCoordinatorForTest(repo.NotificationSlot(), fake, time.Hour, nil)
+		actionUC := usecase.NewActionUseCase(repo, threadModeActionsRegistry(true), fake, "https://example.com", slot)
+		ctx := auth.ContextWithToken(context.Background(), &auth.Token{Sub: "UCREATOR"})
+		c := newThreadModeCase(t, repo)
+
+		created, err := actionUC.CreateAction(ctx, testWorkspaceID, c.ID, "Sample action", "", "", "", types.ActionStatusTodo, nil)
+		gt.NoError(t, err).Required()
+		fake.threadCalls = nil
+
+		newStatus := types.ActionStatusInProgress
+		_, err = actionUC.UpdateAction(ctx, testWorkspaceID, usecase.UpdateActionInput{
+			ID:        created.ID,
+			Status:    &newStatus,
+			SlackSync: usecase.SlackSyncFull,
+			Actor:     usecase.ActorRef{Kind: usecase.ActorKindSlackUser, ID: "UDOER"},
+		})
+		gt.NoError(t, err).Required()
+
+		// No card exists to refresh, and nothing reaches the channel root —
+		// not even the notification slot, which a status change uses in
+		// channel mode.
+		gt.Array(t, fake.cardUpdates).Length(0)
+		gt.Array(t, fake.cardPosts).Length(0)
+		gt.Array(t, fake.postedChannelIDs).Length(0)
+		gt.Array(t, fake.threadCalls).Length(1).Required()
+		call := fake.threadCalls[0]
+		assertQuietCaseThreadReply(t, call)
+		wantURL := fmt.Sprintf("https://example.com/ws/%s/cases/%d/actions/%d", testWorkspaceID, c.ID, created.ID)
+		gt.Value(t, call.text).Equal(fmt.Sprintf("📌 *<%s|Sample action>*\n:arrows_counterclockwise: <@UDOER> changed status: TODO -> IN_PROGRESS", wantURL))
+	})
+
+	t.Run("archiving an action posts the archive notice in the case thread", func(t *testing.T) {
+		repo := memory.New()
+		fake := &threadModeSlackFake{}
+		actionUC := usecase.NewActionUseCase(repo, threadModeActionsRegistry(true), fake, "", nil)
+		ctx := auth.ContextWithToken(context.Background(), &auth.Token{Sub: "UCREATOR"})
+		c := newThreadModeCase(t, repo)
+
+		created, err := actionUC.CreateAction(ctx, testWorkspaceID, c.ID, "Sample action", "", "", "", "", nil)
+		gt.NoError(t, err).Required()
+		fake.threadCalls = nil
+
+		_, err = actionUC.ArchiveAction(ctx, testWorkspaceID, created.ID, usecase.ActorRef{Kind: usecase.ActorKindSlackUser, ID: "UDOER"})
+		gt.NoError(t, err).Required()
+
+		gt.Array(t, fake.cardUpdates).Length(0)
+		gt.Array(t, fake.threadCalls).Length(1).Required()
+		assertQuietCaseThreadReply(t, fake.threadCalls[0])
+		gt.Value(t, fake.threadCalls[0].text).Equal(`:file_cabinet: <@UDOER> archived action "Sample action"`)
+	})
+
+	t.Run("re-posting an unsent action posts the creation notice", func(t *testing.T) {
+		repo := memory.New()
+		fake := &threadModeSlackFake{}
+		ctx := context.Background()
+		c := newThreadModeCase(t, repo)
+		unsent, err := repo.Action().Create(ctx, testWorkspaceID, &model.Action{
+			CaseID: c.ID, Title: "Sample action", Status: types.ActionStatusTodo,
+			CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+		})
+		gt.NoError(t, err).Required()
+
+		actionUC := usecase.NewActionUseCase(repo, threadModeActionsRegistry(true), fake, "", nil)
+		posted, err := actionUC.PostSlackMessageToAction(ctx, testWorkspaceID, unsent.ID)
+		gt.NoError(t, err).Required()
+
+		gt.Array(t, fake.cardPosts).Length(0)
+		gt.Array(t, fake.threadCalls).Length(1).Required()
+		assertQuietCaseThreadReply(t, fake.threadCalls[0])
+		gt.Value(t, fake.threadCalls[0].text).Equal(":heavy_plus_sign: system created action 📌 *Sample action*")
+		gt.Value(t, posted.SlackMessageTS).Equal("1700000001.000001")
+	})
+}
+
+func TestActionUseCase_ActionsEnabled(t *testing.T) {
+	channel := model.NewWorkspaceRegistry()
+	channel.Register(&model.WorkspaceEntry{Workspace: model.Workspace{ID: testWorkspaceID}})
+
+	for name, tc := range map[string]struct {
+		registry *model.WorkspaceRegistry
+		want     bool
+	}{
+		"channel mode always has actions":    {channel, true},
+		"thread mode with actions on":        {threadModeActionsRegistry(true), true},
+		"thread mode defaults to no actions": {threadModeActionsRegistry(false), false},
+		"no registry is the channel default": {nil, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := usecase.NewActionUseCase(memory.New(), tc.registry, nil, "", nil).ActionsEnabled(context.Background(), testWorkspaceID)
+			gt.NoError(t, err).Required()
+			gt.Value(t, got).Equal(tc.want)
+		})
+	}
+
+	t.Run("an unknown workspace is an error", func(t *testing.T) {
+		_, err := usecase.NewActionUseCase(memory.New(), threadModeActionsRegistry(true), nil, "", nil).ActionsEnabled(context.Background(), "unknown-ws")
+		gt.Error(t, err).Is(model.ErrWorkspaceNotFound)
 	})
 }

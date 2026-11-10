@@ -379,3 +379,13 @@ func TestWorkspaceEntry_AllowsMentionBot(t *testing.T) {
 	var nilEntry *model.WorkspaceEntry
 	gt.Bool(t, nilEntry.AllowsMentionBot("B0WORKFLOW1")).False()
 }
+
+func TestWorkspaceEntry_ActionsEnabled(t *testing.T) {
+	var unregistered *model.WorkspaceEntry
+	gt.Bool(t, unregistered.ActionsEnabled()).True()
+	gt.Bool(t, (&model.WorkspaceEntry{}).ActionsEnabled()).True()
+	// CaseActions only matters in thread mode.
+	gt.Bool(t, (&model.WorkspaceEntry{CaseActions: true}).ActionsEnabled()).True()
+	gt.Bool(t, (&model.WorkspaceEntry{CaseMode: model.CaseModeThread}).ActionsEnabled()).False()
+	gt.Bool(t, (&model.WorkspaceEntry{CaseMode: model.CaseModeThread, CaseActions: true}).ActionsEnabled()).True()
+}

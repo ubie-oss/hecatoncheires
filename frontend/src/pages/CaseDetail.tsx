@@ -21,6 +21,7 @@ import { DISCARD_DRAFT, GET_DRAFTS } from '../graphql/drafts'
 import { GET_FIELD_CONFIGURATION } from '../graphql/fieldConfiguration'
 import { GET_CASE_LATEST_JOB_RUN } from '../graphql/caseAgent'
 import { GET_MEMO_CONFIGURATION } from '../graphql/memo'
+import { GET_ACTIONS_ENABLED } from '../graphql/action'
 import MemoTab from '../components/memo/MemoTab'
 import CustomFieldHelpRow from '../components/fields/CustomFieldHelpRow'
 import CaseMarkdownFieldSection from '../components/fields/CaseMarkdownFieldSection'
@@ -225,8 +226,8 @@ export default function CaseDetail() {
   const slackChannelURL: string | null = c?.slackChannelURL || null
   const channelUserCount: number = c?.channelUserCount || 0
   // Thread-mode is a WORKSPACE property: in a thread-mode workspace every case
-  // uses the thread model (no Actions, a configurable board status, no
-  // lifecycle close button) regardless of the individual case's binding flag.
+  // uses the thread model (a configurable board status, no lifecycle close
+  // button, no Action board of its own) regardless of the individual case's binding flag.
   // We key the UI off the workspace mode, not the per-case isThreadBound, so a
   // case still renders thread-style even if its thread binding is missing.
   const threadMode = caseStatuses.isThreadMode
@@ -263,6 +264,15 @@ export default function CaseDetail() {
     skip: !currentWorkspace,
   })
   const memoEnabled = (memoConfigData?.memoConfiguration?.fields?.length ?? 0) > 0
+
+  // A thread-mode workspace has Actions only when it enables them; channel-mode
+  // workspaces always do. Until the answer arrives, fall back to the mode so a
+  // channel-mode case does not flash without its Related Actions section.
+  const { data: actionsEnabledData } = useQuery(GET_ACTIONS_ENABLED, {
+    variables: { workspaceId: currentWorkspace?.id },
+    skip: !currentWorkspace,
+  })
+  const actionsEnabled: boolean = actionsEnabledData?.actionsEnabled ?? !threadMode
 
   const refetchOptions = useMemo(
     () => [
@@ -667,9 +677,6 @@ export default function CaseDetail() {
             />
           ))}
 
-          {/* Related Actions only exist for activated channel-mode cases.
-              Drafts have no actions yet, and thread-mode workspaces never
-              manage Actions at all — hide the entire section in both cases. */}
           {memoEnabled && (
           <section className="h-section">
             <div className="h-section-h">
@@ -683,7 +690,11 @@ export default function CaseDetail() {
           </section>
           )}
 
-          {c.status !== 'DRAFT' && !threadMode && (
+          {/* Related Actions exist for every activated case of a workspace
+              with Actions: always in channel mode, and in thread mode when the
+              workspace enables them. Drafts have no actions yet, so the
+              section is hidden for them. */}
+          {c.status !== 'DRAFT' && actionsEnabled && (
           <section className="h-section">
             <div className="h-section-h">
               <span className="h-section-title">{t('sectionRelatedActions')}</span>
@@ -698,6 +709,9 @@ export default function CaseDetail() {
                 </>
               )}
               <span className="spacer" />
+              {/* A thread-mode workspace's /actions route is the Case board,
+                  not an Action board, so there is no action list to open. */}
+              {!threadMode && (
               <Button
                 size="sm"
                 variant="ghost"
@@ -707,6 +721,7 @@ export default function CaseDetail() {
               >
                 {t('linkOpenInActionList')}
               </Button>
+              )}
               {actionView === 'open' && (
                 <Button
                   size="sm"

@@ -25,6 +25,22 @@ describe('buildSlackPermalink', () => {
 
   it('returns null when neither a channel URL nor a channel ID is known', () => {
     expect(buildSlackPermalink(null, null, TS)).toBeNull()
+    expect(buildSlackPermalink(null, null, TS, '1700000000.000001')).toBeNull()
+  })
+
+  it('opens a thread reply within its thread', () => {
+    expect(buildSlackPermalink(TEAM_CHANNEL, 'C123', TS, '1700000000.000001')).toBe(
+      `${TEAM_CHANNEL}/${TS_COMPACT}?thread_ts=1700000000.000001&cid=C123`,
+    )
+    expect(buildSlackPermalink(null, 'C123', TS, '1700000000.000001')).toBe(
+      `https://slack.com/archives/C123/${TS_COMPACT}?thread_ts=1700000000.000001&cid=C123`,
+    )
+  })
+
+  it('treats a message that is its own thread root as a channel message', () => {
+    for (const threadTS of [null, undefined, '', TS]) {
+      expect(buildSlackPermalink(TEAM_CHANNEL, 'C123', TS, threadTS)).toBe(`${TEAM_CHANNEL}/${TS_COMPACT}`)
+    }
   })
 })
 

@@ -10,6 +10,7 @@ import { GET_CASE_STATUS_CONFIG } from '../graphql/caseStatus'
 import { GET_CASE_LATEST_JOB_RUN } from '../graphql/caseAgent'
 import { GET_FIELD_CONFIGURATION } from '../graphql/fieldConfiguration'
 import { GET_MEMO_CONFIGURATION } from '../graphql/memo'
+import { GET_ACTIONS_ENABLED } from '../graphql/action'
 import CaseDetail from './CaseDetail'
 
 const WORKSPACE = 'risk'
@@ -75,8 +76,37 @@ function getCaseMock(status: 'OPEN' | 'CLOSED', archivedAt: string | null, field
   }
 }
 
-function supportingMocks(fieldDefs: unknown[] = []): MockedResponse[] {
+function actionsEnabledMock(enabled: boolean): MockedResponse {
+  return {
+    request: { query: GET_ACTIONS_ENABLED, variables: { workspaceId: WORKSPACE } },
+    maxUsageCount: 10,
+    result: { data: { actionsEnabled: enabled } },
+  }
+}
+
+function threadModeStatusMock(): MockedResponse {
+  return {
+    request: { query: GET_CASE_STATUS_CONFIG, variables: { workspaceId: WORKSPACE } },
+    maxUsageCount: 10,
+    result: {
+      data: {
+        caseStatusConfig: {
+          __typename: 'ActionConfig',
+          initial: 'triage',
+          closed: ['done'],
+          statuses: [
+            { __typename: 'ActionStatusDefinition', id: 'triage', name: 'Triage', description: '', color: 'idle', emoji: '' },
+            { __typename: 'ActionStatusDefinition', id: 'done', name: 'Done', description: '', color: 'success', emoji: '' },
+          ],
+        },
+      },
+    },
+  }
+}
+
+function supportingMocks(fieldDefs: unknown[] = [], opts: { threadMode?: boolean; actionsEnabled?: boolean } = {}): MockedResponse[] {
   return [
+    actionsEnabledMock(opts.actionsEnabled ?? !opts.threadMode),
     {
       request: { query: GET_FIELD_CONFIGURATION, variables: { workspaceId: WORKSPACE } },
       maxUsageCount: 10,
@@ -97,11 +127,13 @@ function supportingMocks(fieldDefs: unknown[] = []): MockedResponse[] {
         },
       },
     },
-    {
-      request: { query: GET_CASE_STATUS_CONFIG, variables: { workspaceId: WORKSPACE } },
-      maxUsageCount: 10,
-      result: { data: { caseStatusConfig: null } },
-    },
+    opts.threadMode
+      ? threadModeStatusMock()
+      : {
+          request: { query: GET_CASE_STATUS_CONFIG, variables: { workspaceId: WORKSPACE } },
+          maxUsageCount: 10,
+          result: { data: { caseStatusConfig: null } },
+        },
     {
       request: { query: GET_MEMO_CONFIGURATION, variables: { workspaceId: WORKSPACE } },
       maxUsageCount: 10,
@@ -270,5 +302,34 @@ describe('CaseDetail custom field placement', () => {
     renderDetail([getCaseMock('OPEN', null, values.slice(1)), ...supportingMocks(fieldDefs.slice(1))])
     await screen.findByTestId('case-field-runbook')
     expect(screen.queryByTestId('case-fields-inline')).toBeNull()
+  })
+})
+
+// The Related Actions section follows the workspace: channel mode always has
+// it, and a thread-mode workspace only when it enables Actions ([case] actions,
+// off by default).
+describe('CaseDetail related actions section', () => {
+  it('is shown in a channel-mode workspace', async () => {
+    renderDetail([getCaseMock('OPEN', null), ...supportingMocks()])
+    await screen.findByText('Suspicious login')
+    expect(await screen.findByTestId('add-action-button')).toBeInTheDocument()
+  })
+
+  it('is hidden in a thread-mode workspace that leaves actions off', async () => {
+    renderDetail([getCaseMock('OPEN', null), ...supportingMocks([], { threadMode: true, actionsEnabled: false })])
+    await screen.findByText('Suspicious login')
+    // The board-status selector proves the thread-mode config has arrived.
+    await screen.findByTestId('aside-board-status')
+    await waitFor(() => {
+      expect(screen.queryByTestId('add-action-button')).toBeNull()
+    })
+  })
+
+  it('is shown in a thread-mode workspace that enables actions, without the action-list link', async () => {
+    renderDetail([getCaseMock('OPEN', null), ...supportingMocks([], { threadMode: true, actionsEnabled: true })])
+    await screen.findByText('Suspicious login')
+    await screen.findByTestId('aside-board-status')
+    expect(await screen.findByTestId('add-action-button')).toBeInTheDocument()
+    expect(screen.queryByTestId('case-open-in-actions')).toBeNull()
   })
 })

@@ -88,6 +88,7 @@ const (
 	MsgActionAssigneePlaceholder
 
 	// Action change notifications (Slack thread)
+	MsgActionCreated                  // ":heavy_plus_sign: %s created action %s" (thread-mode case thread)
 	MsgActionChangeTitle              // ":pencil2: %s changed title: %q -> %q"
 	MsgActionChangeStatus             // ":arrows_counterclockwise: %s changed status: %s -> %s"
 	MsgActionChangeAssigneeAssigned   // ":bust_in_silhouette: %s assigned %s"

@@ -715,6 +715,10 @@ so the Action's Activity feed and the Slack thread stay aligned:
 | Step reverted to ongoing | `STEP_REOPENED`         | `:arrow_backward: {actor} reopened step "{title}"`  |
 | Step renamed           | `STEP_TITLE_CHANGED`      | `:pencil2: {actor} renamed step "{old}" -> "{new}"` |
 
+In a thread-mode Case these are replies in the Case thread instead, prefixed
+with the Action they are about and never broadcast (see
+[Slack → Actions in thread mode](slack.md#actions-in-thread-mode)).
+
 All Step lifecycle notifications are posted with `reply_broadcast=true`, so
 they appear inside the Action's thread AND surface in the parent Case channel
 as "Also sent to #channel". This keeps channel watchers aware of progress
@@ -1140,7 +1144,7 @@ the thread.
 
 | Surface | Purpose | Behaviour |
 |---|---|---|
-| **Thread** | Per-event audit log. Always one Slack message per change. | Every Action / ActionStep change posts a new context block as a thread reply on the Action card. Never collapsed, never updated. |
+| **Thread** | Per-event audit log. Always one Slack message per change. | Every Action / ActionStep change posts a new context block as a thread reply on the Action card (in a thread-mode Case: in the Case thread, naming the Action). Never collapsed, never updated. |
 | **Channel** | High-signal visibility into recent change activity. | A single editable "channel message" aggregates the latest changes within a rolling slot window. |
 
 ### Notification slot (channel-side aggregation)

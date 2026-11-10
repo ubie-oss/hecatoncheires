@@ -94,15 +94,14 @@ var (
 	// direct WorkspaceEntry construction (tests / eval) and fails closed.
 	ErrThreadModeSlackUnconfigured = errors.New("thread-mode workspace requires slack service and monitor channel")
 
-	// ErrCaseThreadModeNoActions is returned by ActionUseCase write paths when
-	// the parent (or reparent target) Case is thread-mode. Thread-mode cases
-	// track progress through the configurable board status (Kanban) and have no
-	// Actions — the configurable status attaches to the Case itself there, while
-	// in channel mode it attaches to Actions (see model.Case.BoardStatus). The
-	// invariant is enforced at the usecase boundary so every entry point
-	// (GraphQL, Slack, agent tools, eval) is covered, not just the agent tool
-	// wiring that withholds the action tools for thread-mode workspaces.
-	ErrCaseThreadModeNoActions = errors.New("thread-mode case cannot have actions")
+	// ErrCaseActionsDisabled is returned by the action write paths that put an
+	// Action on a Case (CreateAction, and UpdateAction's reparent) when that
+	// Case belongs to a thread-mode workspace that has not enabled Actions with
+	// [case] actions. The option is off by default, so a thread-mode workspace
+	// configured before it existed keeps having no Actions. Enforced at the
+	// usecase boundary so every entry point (GraphQL, Slack, agent tools, eval)
+	// is covered, not just the Web UI that hides the section.
+	ErrCaseActionsDisabled = errors.New("actions are not enabled for this thread-mode workspace")
 
 	// Existing Slack channel errors (case creation linking an existing channel)
 	//

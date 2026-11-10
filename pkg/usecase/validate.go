@@ -46,6 +46,12 @@ const (
 	// IssueKindActionStatus is an Action whose Status is not part of the
 	// workspace's configured action status set.
 	IssueKindActionStatus ValidationIssueKind = "action_status_invalid"
+	// IssueKindActionsDisabled is an Action stored in a thread-mode workspace
+	// whose configuration does not enable Actions ([case] actions is off, the
+	// default). It arises when the option is turned off after Actions were
+	// created. The Web UI then shows no Related Actions section and the thread-
+	// mode board lists Cases, so the Action is visible nowhere in the UI.
+	IssueKindActionsDisabled ValidationIssueKind = "action_actions_disabled"
 )
 
 // ValidationTargetKind names the kind of entity an issue was found on.
@@ -559,10 +565,13 @@ func joinCaseIDs(ids map[int64]struct{}) string {
 
 // validateActionStatuses checks every Action, archived ones included: an
 // archived Action still shows up in the Case history, so a status id the
-// configuration dropped is just as visible there.
+// configuration dropped is just as visible there. In a thread-mode workspace
+// that does not enable Actions ([case] actions), every Action is reported as
+// well, since nothing in the UI shows it.
 func (uc *UseCases) validateActionStatuses(ctx context.Context, entry *model.WorkspaceEntry, acc *issueAccumulator) error {
 	set := entry.ActionStatusSet
-	if set == nil {
+	actionsEnabled := entry.ActionsEnabled()
+	if set == nil && actionsEnabled {
 		return nil
 	}
 	wsID := entry.Workspace.ID
@@ -576,7 +585,13 @@ func (uc *UseCases) validateActionStatuses(ctx context.Context, entry *model.Wor
 	}
 
 	for _, a := range actions {
-		if set.IsValid(string(a.Status)) {
+		if !actionsEnabled {
+			acc.add(IssueKindActionsDisabled, "",
+				ValidationTarget{Kind: TargetKindAction, CaseID: a.CaseID, ActionID: a.ID},
+				"no actions ([case] actions is off)", "action exists",
+				"action is stored in a thread-mode workspace that does not enable actions; set [case] actions = true to show it again")
+		}
+		if set == nil || set.IsValid(string(a.Status)) {
 			continue
 		}
 		acc.add(IssueKindActionStatus, "",

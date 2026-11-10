@@ -96,6 +96,9 @@ interface ActionActivityProps {
   slackMessageTS?: string | null
   slackChannelID?: string | null
   slackChannelURL?: string | null
+  /** Root timestamp of the parent case's thread, set for a thread-mode case.
+   * The action's Slack message is then a reply inside that thread. */
+  slackThreadTS?: string | null
   /** Comment id to select the Comments tab for and scroll into view. Supplied
    * by the surrounding page from the `?comment=` deep link the Slack
    * notification carries. */
@@ -248,8 +251,10 @@ const styles: Record<string, CSSProperties> = {
   composer: { paddingTop: 8, borderTop: '1px solid var(--border-light, #E5E7EB)' },
 }
 
-export default function ActionActivity({ workspaceId, actionId, pageSize = 20, slackMessageTS, slackChannelID, slackChannelURL, highlightCommentId }: ActionActivityProps) {
-  const slackPermalink = buildSlackPermalink(slackChannelURL, slackChannelID, slackMessageTS)
+export default function ActionActivity({ workspaceId, actionId, pageSize = 20, slackMessageTS, slackChannelID, slackChannelURL, slackThreadTS, highlightCommentId }: ActionActivityProps) {
+  // In a thread-mode case the action's Slack message is a reply in the case
+  // thread, so the link names that thread to open the reply in place.
+  const slackPermalink = buildSlackPermalink(slackChannelURL, slackChannelID, slackMessageTS, slackThreadTS)
   const { t } = useTranslation()
   const { user } = useAuth()
 

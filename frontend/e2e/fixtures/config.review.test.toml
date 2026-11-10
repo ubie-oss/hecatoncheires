@@ -17,6 +17,9 @@ channel = "C0E2EREVIEW"
 [case]
 initial = "triage"
 closed  = ["done"]
+# Enables Actions on this thread-mode workspace's cases (off by default), so
+# the E2E suite can drive the thread-mode action journey.
+actions = true
 
 [[case.status]]
 id    = "triage"

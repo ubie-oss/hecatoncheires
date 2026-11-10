@@ -3,6 +3,7 @@ package usecase_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -737,4 +738,34 @@ func TestActionCommentBroadcasts(t *testing.T) {
 	// Comments get the same channel-level attention as a status change.
 	gt.Bool(t, usecase.ActionCommentBroadcastsForTest).True()
 	gt.Bool(t, usecase.ShouldBroadcastActionEventForTest(types.ActionEventStatusChanged)).True()
+}
+
+func TestActionCommentUseCase_ThreadModeCaseNotifiesInTheCaseThread(t *testing.T) {
+	i18n.Init(i18n.LangEN)
+	repo := memory.New()
+	fake := &threadModeSlackFake{}
+	slot := usecase.NewNotificationSlotCoordinatorForTest(repo.NotificationSlot(), fake, time.Hour, nil)
+	ctx := auth.ContextWithToken(context.Background(), &auth.Token{Sub: "UAUTHOR"})
+	c := newThreadModeCase(t, repo)
+
+	actionUC := usecase.NewActionUseCase(repo, threadModeActionsRegistry(true), fake, "", nil)
+	action, err := actionUC.CreateAction(ctx, testWorkspaceID, c.ID, "Sample action", "", "", "", "", nil)
+	gt.NoError(t, err).Required()
+	fake.threadCalls = nil
+
+	commentUC := usecase.NewActionCommentUseCase(repo, nil, fake, "https://example.com", slot)
+	comment, err := commentUC.Create(ctx, usecase.CreateActionCommentInput{
+		WorkspaceID: testWorkspaceID,
+		ActionID:    action.ID,
+		Body:        "Example comment",
+	})
+	gt.NoError(t, err).Required()
+
+	gt.Array(t, fake.postedChannelIDs).Length(0)
+	gt.Array(t, fake.threadCalls).Length(1).Required()
+	assertQuietCaseThreadReply(t, fake.threadCalls[0])
+	actionURL := fmt.Sprintf("https://example.com/ws/%s/cases/%d/actions/%d", testWorkspaceID, c.ID, action.ID)
+	gt.Value(t, fake.threadCalls[0].text).Equal(fmt.Sprintf(
+		"📌 *<%s|Sample action>*\n:speech_balloon: <@UAUTHOR> commented: <%s?comment=%s|Open comment>\n> Example comment",
+		actionURL, actionURL, comment.ID))
 }
