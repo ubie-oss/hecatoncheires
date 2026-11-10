@@ -30,9 +30,8 @@ const (
 	ToolSetWebFetch = "webfetch"
 	ToolSetJira     = "jira"
 	// ToolSetCore is the FULL action toolset (create / update / archive), as
-	// opposed to the read-only core_ro handed to investigation sub-agents. Only
-	// the channel-mode case agent asks for it: a thread-mode workspace manages
-	// no Actions at all.
+	// opposed to the read-only core_ro handed to investigation sub-agents. The
+	// channel-mode case agent and the thread-mode mention agent ask for it.
 	ToolSetCore = "core"
 	// ToolSetMemo is the Case-scoped memo toolset (memo__*). Built only when a
 	// memo mutator and a memo schema are configured for the workspace.
@@ -101,8 +100,8 @@ var KnownToolSetIDs = []string{
 }
 
 // KnownToolSetIDsNoCore is KnownToolSetIDs without the core (action) toolset.
-// Thread-mode agents advertise this list to the planner: a thread-mode
-// workspace manages no Actions, so the planner must never be offered the
+// Thread-mode create / materialize turns advertise this list to the planner:
+// they are given no Action tools, so the planner must never be offered the
 // core read tools (list/get action). Paired with ToolSetDeps.OmitCore so the
 // resolver also withholds the underlying tools.
 var KnownToolSetIDsNoCore = []string{
@@ -114,13 +113,19 @@ var KnownToolSetIDsNoCore = []string{
 }
 
 // KnownToolSetIDsThreadWrite is KnownToolSetIDsNoCore plus the case writer
-// toolset. Thread-mode agents advertise this to the planner on mention turns,
-// where a concrete case exists to act on and a human asked for the change: the
-// sub-agent may then edit, assign, and transition that case. Materialize and
-// creation turns advertise the plain KnownToolSetIDsNoCore instead, so the
-// planner is never offered a writer tool the resolver cannot wire — the
-// prompt-vs-capability mismatch the architecture rule forbids.
-var KnownToolSetIDsThreadWrite = append(append([]string{}, KnownToolSetIDsNoCore...), ToolSetCaseWrite)
+// toolset, the action toolsets and the memo toolset. Thread-mode agents
+// advertise this to the planner on mention turns, where a concrete case exists
+// to act on and a human asked for the change: a sub-agent may then edit,
+// assign, and transition that case, read (core_ro) or create / update /
+// archive (core) its Actions, and read or write its memos. The action ids
+// resolve to tools only when the mention turn's scope sets
+// Scope.ThreadModeActions (the workspace enables [case] actions), and the memo
+// id only when the workspace enables memos; the host probes the palette, so an
+// id that resolves to nothing is never advertised. Materialize and creation turns advertise the
+// plain KnownToolSetIDsNoCore instead, so the planner is never offered a writer
+// tool the resolver cannot wire — the prompt-vs-capability mismatch the
+// architecture rule forbids.
+var KnownToolSetIDsThreadWrite = append(append([]string{}, KnownToolSetIDsNoCore...), ToolSetCaseWrite, ToolSetCoreRO, ToolSetCore, ToolSetMemo)
 
 // KnownToolSetIDsWorkspaceChannel is the planner-advertised list for the
 // workspace-channel agent: the cross-case toolset plus the read-only auxiliary
@@ -333,9 +338,10 @@ type ToolSetDeps struct {
 	// not) and Schema drives case__update_case's custom-field coercion.
 	CaseWrite casewriter.Deps
 
-	// OmitCore omits the core (action) toolset entirely. Set by thread-mode
-	// agents: a thread-mode workspace manages no Actions, so even the
-	// read-only list/get-action tools must not exist. Without this the
+	// OmitCore omits the core (action) toolset entirely. Set for every run on a
+	// thread-mode workspace except the mention turn (see
+	// kernel.Scope.ThreadModeActions): those agents are given no Actions, so
+	// even the read-only list/get-action tools must not exist. Without this the
 	// resolver would always build them (they only need Repo), since the
 	// core read tools do not depend on ActionUC being wired.
 	OmitCore bool

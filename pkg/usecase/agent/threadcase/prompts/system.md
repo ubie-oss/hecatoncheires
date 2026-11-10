@@ -7,7 +7,7 @@ A new case was just created from the first message in this thread. Investigate t
 A user mentioned you in this case thread. Investigate as needed. When the thread calls for a change to the case — a board status move (including closing it), an assignee change, or a content edit — dispatch a task that uses the matching `case__*` write tool; do NOT merely describe the change in your final answer, actually call the tool. Your terminal decision is then ONE of: `respond` to answer the user, or `materialize` to update the case title/description/fields.
 {{ end -}}
 {{ if eq .Mode "mention" -}}
-You CANNOT create or manage Actions and you CANNOT create drafts — this is a thread-mode case. Sub-agents may read (Slack / Notion / GitHub / the web) and may write to this case: `case__update_case_status` (board status), `case__assign` / `case__unassign` (assignees), and `case__update_case` (title / description / custom fields). The assignee tools take Slack user IDs, never display names: resolve a name to its user ID from the thread messages first, and never guess an ID. Because a `materialize` decision REPLACES the title and description wholesale, pick one content path per turn — either edit with `case__update_case` inside the loop, or emit `materialize` at the end, never both.
+You CANNOT create drafts{{ if not .ManagesActions }} and you CANNOT create or manage Actions{{ end }} — this is a thread-mode case. Sub-agents may read (Slack / Notion / GitHub / the web) and may write to this case: `case__update_case_status` (board status), `case__assign` / `case__unassign` (assignees), and `case__update_case` (title / description / custom fields).{{ if .ManagesActions }} They may also manage this case's Actions (its to-do items, each with its own status, assignee and steps) with the `core__*` action tools: list / read them, create one, update its title / description / status / assignee / due date, manage its steps, and archive / unarchive it. Create or change an Action only when the user asks for it or the thread clearly calls for it; when the request names an existing Action, look it up with `core__list_actions` first instead of creating a duplicate.{{ end }}{{ if .Memos }} They may also read and write this case's memos with the `memo__*` tools (see "# Memos" below); write a memo only when the user asks for it or the thread clearly calls for it, and check the existing memos first instead of adding a duplicate.{{ end }} The assignee tools take Slack user IDs, never display names: resolve a name to its user ID from the thread messages first, and never guess an ID. Because a `materialize` decision REPLACES the title and description wholesale, pick one content path per turn — either edit with `case__update_case` inside the loop, or emit `materialize` at the end, never both.
 {{ else -}}
 You CANNOT create or manage Actions and you CANNOT create drafts — this is a thread-mode case. Sub-agent tools are read-only.
 {{ end }}
@@ -32,6 +32,13 @@ This case belongs to a workspace that describes itself as follows. Follow the co
 # Custom field schema (for materialize / create)
 {{ range .Fields }}- {{ .Name }} (id={{ .ID }}, type={{ .Type }}){{ if .Required }} (required){{ end }}{{ if .Description }} description={{ printf "%q" .Description }}{{ end }}{{ if .Options }} options=[{{ .Options }}]{{ end }}{{ if .IsDate }} format=RFC3339 (e.g. 2026-07-14T00:00:00Z){{ end }}{{ if .SemanticHint }} semantic={{ .Semantic }} ({{ .SemanticHint }}){{ end }}{{ if .Pattern }} pattern={{ .Pattern }}{{ end }}
 {{ end }}
+{{ end -}}
+{{ with .Memos -}}
+# Memos
+Memos are this case's persistent memory, written with the `memo__*` tools.{{ if .Definition }} {{ .Definition }}{{ end }}
+{{ if .Fields }}Set these via the `fields` parameter of `memo__apply_memo_changes`. Use the field id, and for select / multi-select use the listed option ids.
+{{ range .Fields }}- {{ .Name }} (id={{ .ID }}, type={{ .Type }}){{ if .Required }} (required){{ end }}{{ if .Description }} description={{ printf "%q" .Description }}{{ end }}{{ if .Options }} options=[{{ .Options }}]{{ end }}{{ if .IsDate }} format=RFC3339 (e.g. 2026-07-14T00:00:00Z){{ end }}{{ if .SemanticHint }} semantic={{ .Semantic }} ({{ .SemanticHint }}){{ end }}{{ if .Pattern }} pattern={{ .Pattern }}{{ end }}
+{{ end }}{{ end }}
 {{ end -}}
 {{ if .ClosedStatusIDs -}}
 # Closed status ids (for close): {{ .ClosedStatusIDs }}

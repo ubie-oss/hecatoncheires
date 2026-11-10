@@ -15,6 +15,7 @@ const ACTION_FIELDS = `
     }
     slackChannelID
     slackChannelURL
+    slackThreadTS
   }
   title
   description
@@ -227,5 +228,14 @@ export const UPDATE_ACTION_COMMENT = gql`
 export const DELETE_ACTION_COMMENT = gql`
   mutation DeleteActionComment($workspaceId: String!, $input: DeleteActionCommentInput!) {
     deleteActionComment(workspaceId: $workspaceId, input: $input)
+  }
+`
+
+// GET_ACTIONS_ENABLED reports whether the workspace's Cases have Actions:
+// always true in channel mode, and in thread mode only when the workspace
+// enables them ([case] actions, off by default).
+export const GET_ACTIONS_ENABLED = gql`
+  query GetActionsEnabled($workspaceId: String!) {
+    actionsEnabled(workspaceId: $workspaceId)
   }
 `

@@ -36,7 +36,56 @@ func TestBuildSystemPrompt_ThreadContext(t *testing.T) {
 	gt.String(t, prompt).Contains("Payment outage")
 	gt.String(t, prompt).Contains("severity")
 	gt.String(t, prompt).Contains("DONE")
-	gt.String(t, prompt).Contains("CANNOT create or manage Actions")
+	// Actions are off by default ([case] actions), and so are memos when the
+	// workspace configures none: the prompt names neither tool family.
+	gt.String(t, prompt).Contains("You CANNOT create drafts and you CANNOT create or manage Actions — this is a thread-mode case.")
+	gt.Bool(t, strings.Contains(prompt, "core__")).False()
+	gt.Bool(t, strings.Contains(prompt, "memo__")).False()
+	gt.Bool(t, strings.Contains(prompt, "# Memos")).False()
+}
+
+// A workspace that enables [case] actions gets a mention prompt that describes
+// the core__* tools, which its scope then grants (Scope.ThreadModeActions).
+func TestBuildSystemPrompt_MentionWithActionsEnabled(t *testing.T) {
+	ws := newThreadWorkspace()
+	ws.CaseActions = true
+
+	prompt := threadcase.BuildSystemPromptForTest(newThreadCase(), ws, threadcase.ModeMention, "")
+	gt.String(t, prompt).Contains("You CANNOT create drafts — this is a thread-mode case.")
+	gt.Bool(t, strings.Contains(prompt, "CANNOT create or manage Actions")).False()
+	gt.String(t, prompt).Contains("They may also manage this case's Actions (its to-do items, each with its own status, assignee and steps) with the `core__*` action tools")
+	gt.String(t, prompt).Contains("look it up with `core__list_actions` first instead of creating a duplicate.")
+
+	// The option only concerns a mention on an existing case.
+	materialize := threadcase.BuildSystemPromptForTest(newThreadCase(), ws, threadcase.ModeMaterialize, "")
+	gt.Bool(t, strings.Contains(materialize, "core__")).False()
+	gt.String(t, materialize).Contains("You CANNOT create or manage Actions and you CANNOT create drafts")
+}
+
+// A workspace with memos gets a mention prompt naming the memo__* tools and
+// listing the memo definition and field ids memo__apply_memo_changes takes.
+func TestBuildSystemPrompt_MentionWithMemos(t *testing.T) {
+	ws := newThreadWorkspace()
+	ws.MemoConfig = &config.MemoConfig{
+		Description: "Record each finding.",
+		FieldSchema: &config.FieldSchema{Fields: []config.FieldDefinition{
+			{ID: "kind", Name: "Kind", Type: types.FieldTypeSelect, Required: true, Options: []config.FieldOption{{ID: "fact"}, {ID: "idea"}}},
+			{ID: "seen_at", Name: "Seen at", Type: types.FieldTypeDate},
+		}},
+	}
+
+	prompt := threadcase.BuildSystemPromptForTest(newThreadCase(), ws, threadcase.ModeMention, "")
+	gt.String(t, prompt).Contains("They may also read and write this case's memos with the `memo__*` tools (see \"# Memos\" below)")
+	gt.String(t, prompt).Contains("# Memos\n" +
+		"Memos are this case's persistent memory, written with the `memo__*` tools. Record each finding.\n" +
+		"Set these via the `fields` parameter of `memo__apply_memo_changes`. Use the field id, and for select / multi-select use the listed option ids.\n" +
+		"- Kind (id=kind, type=select) (required) options=[fact, idea]\n" +
+		"- Seen at (id=seen_at, type=date) format=RFC3339 (e.g. 2026-07-14T00:00:00Z)\n\n")
+
+	// Memos are described only to a mention turn, the one whose sub-agents get
+	// the memo tools.
+	create := threadcase.BuildSystemPromptForTest(nil, ws, threadcase.ModeCreate, "")
+	gt.Bool(t, strings.Contains(create, "memo__")).False()
 }
 
 // TestBuildSystemPrompt_TemplateRendersEverySection drives every action of

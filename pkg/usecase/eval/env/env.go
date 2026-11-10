@@ -434,6 +434,7 @@ func buildRegistry(wc *config.WorkspaceConfig) (*model.WorkspaceRegistry, *model
 		CaseMode:              wc.CaseMode,
 		SlackMonitorChannelID: wc.SlackMonitorChannel,
 		CaseStatusSet:         wc.CaseStatusSet,
+		CaseActions:           wc.CaseActions,
 
 		AllowExistingSlackChannel: wc.AllowExistingSlackChannel,
 	}
@@ -520,9 +521,9 @@ func buildJobRunner(
 			CaseRefUC:    uc.Case,
 		}
 		out := make([]gollem.Tool, 0, 16)
-		// Action tools exist only in channel-mode workspaces; thread-mode cases
-		// have no Actions and the usecase boundary rejects action writes there.
-		// Mirror the production Job runtime (pkg/cli/job_runtime.go), which gates
+		// Action tools are wired only in channel-mode workspaces; thread-mode
+		// agents are given no Action tools (Actions there are managed from the
+		// Web UI). Mirror the production Job runtime (pkg/cli/job_runtime.go), which gates
 		// the core/actionwriter tools on workspace mode.
 		if ws == nil || !ws.IsThreadMode() {
 			out = append(out, core.NewReadOnly(coreDeps)...)

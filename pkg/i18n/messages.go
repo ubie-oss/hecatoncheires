@@ -47,6 +47,7 @@ var messagesEN = [msgKeyCount]string{
 	MsgActionAssigneePlaceholder: "Select assignee",
 
 	// Action change notifications
+	MsgActionCreated:                  ":heavy_plus_sign: %s created action %s",
 	MsgActionChangeTitle:              ":pencil2: %s changed title: %q -> %q",
 	MsgActionChangeStatus:             ":arrows_counterclockwise: %s changed status: %s -> %s",
 	MsgActionChangeAssigneeAssigned:   ":bust_in_silhouette: %s assigned %s",
@@ -271,6 +272,7 @@ var messagesJA = [msgKeyCount]string{
 	MsgActionAssigneePlaceholder: "担当者を選択",
 
 	// Action change notifications
+	MsgActionCreated:                  ":heavy_plus_sign: %s がアクション %s を作成しました",
 	MsgActionChangeTitle:              ":pencil2: %s がタイトルを変更しました: %q → %q",
 	MsgActionChangeStatus:             ":arrows_counterclockwise: %s がステータスを変更しました: %s → %s",
 	MsgActionChangeAssigneeAssigned:   ":bust_in_silhouette: %s が %s をアサインしました",

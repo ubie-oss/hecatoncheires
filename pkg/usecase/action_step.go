@@ -14,7 +14,6 @@ import (
 	"github.com/m-mizutani/hecatoncheires/pkg/i18n"
 	"github.com/m-mizutani/hecatoncheires/pkg/service/slack"
 	"github.com/m-mizutani/hecatoncheires/pkg/utils/errutil"
-	goslack "github.com/slack-go/slack"
 )
 
 // ActionStepUseCase orchestrates ActionStep CRUD: load parent Action and
@@ -335,10 +334,16 @@ func (uc *ActionStepUseCase) recordStepEvent(ctx context.Context, workspaceID st
 }
 
 // notifyStepEvent posts a thread context-block to Slack describing the
-// step change. Best-effort: silently no-ops when Slack is not configured
-// or the parent Action / Case has no Slack thread to attach to.
+// step change — in the Action card's thread for a channel-mode Case, in the
+// Case thread for a thread-mode one (see resolveActionNotifyTarget).
+// Best-effort: silently no-ops when Slack is not configured or there is no
+// Slack thread to attach to.
 func (uc *ActionStepUseCase) notifyStepEvent(ctx context.Context, action *model.Action, caseModel *model.Case, kind types.ActionEventKind, actor ActorRef, oldValue, newValue string) {
-	if uc.slackService == nil || action == nil || action.SlackMessageTS == "" || caseModel == nil || caseModel.SlackChannelID == "" {
+	if uc.slackService == nil {
+		return
+	}
+	target, ok := resolveActionNotifyTarget(action, caseModel)
+	if !ok {
 		return
 	}
 
@@ -359,28 +364,15 @@ func (uc *ActionStepUseCase) notifyStepEvent(ctx context.Context, action *model.
 		return
 	}
 
-	blocks := []goslack.Block{
-		goslack.NewContextBlock("",
-			goslack.NewTextBlockObject(goslack.MarkdownType, msg, false, false),
-		),
+	// The step usecase has no base URL, so in a thread-mode Case the Action is
+	// named by its title without a WebUI link.
+	notice := actionNotice{
+		body:       msg,
+		broadcast:  shouldBroadcastActionEvent(kind),
+		nameAction: true,
 	}
-	broadcast := shouldBroadcastActionEvent(kind)
-	aggregate := broadcast && uc.slotCoord.enabled()
-
-	var opts []slack.PostThreadOption
-	if broadcast && !aggregate {
-		opts = append(opts, slack.WithBroadcastToChannel())
-	}
-	if _, postErr := uc.slackService.PostThreadMessage(ctx, caseModel.SlackChannelID, action.SlackMessageTS, blocks, msg, opts...); postErr != nil {
-		errutil.Handle(ctx, postErr, "failed to post action step notification")
-		return
-	}
-	if aggregate {
-		uc.slotCoord.enqueueChannelLine(ctx, caseModel.SlackChannelID, slotEntry{
-			ActionMessageTS: action.SlackMessageTS,
-			ActionTitle:     action.Title,
-			Body:            msg,
-		})
+	if err := postActionNotice(ctx, uc.slackService, uc.slotCoord, target, action, notice); err != nil {
+		errutil.Handle(ctx, err, "failed to post action step notification")
 	}
 }
 

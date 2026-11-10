@@ -737,8 +737,8 @@ type jobToolAdapters struct {
 
 // buildJobTools assembles the tool slice for a single Job invocation. Action
 // tools (read-only list/get plus the writer set) are bound only for
-// channel-mode workspaces: a thread-mode workspace manages no Actions, so the
-// Job agent must not be able to read or mutate them. Case-editing
+// channel-mode workspaces: a thread-mode workspace's Actions are managed from
+// the Web UI, and its Job agent must not be able to read or mutate them. Case-editing
 // (casewriter, incl. thread-mode board status), Slack post, web fetch and memo
 // tools are bound in both modes.
 func buildJobTools(deps jobRuntimeDeps, adapters jobToolAdapters, c *model.Case, ws *model.WorkspaceEntry) []gollem.Tool {

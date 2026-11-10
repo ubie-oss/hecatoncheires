@@ -172,11 +172,16 @@ func TestToolFactoryExpandsTheAgentPalette(t *testing.T) {
 		gt.Bool(t, slices.Contains(names, "core__list_actions")).True()
 	})
 
-	t.Run("the thread case agent gets no action tools at all", func(t *testing.T) {
+	t.Run("the thread case agent's palette carries the action reads for its planner", func(t *testing.T) {
+		// On a channel-mode workspace nothing withholds them; the thread-mode
+		// gate is pinned by TestToolFactoryWithdrawsActionToolsInAThreadModeWorkspace.
+		// The agent is a planner, so it is declared only the read half; the
+		// writers reach its tasks (TestToolFactoryGrantsActionToolsToAThreadModeMentionTurn).
 		tools, err := factory(ctx, newProcess(kernel.AgentCaseThread, sc))
 		gt.NoError(t, err).Required()
 		names := toolNames(tools)
-		gt.Bool(t, hasPrefixIn(names, "core__")).False()
+		gt.Bool(t, slices.Contains(names, "core__list_actions")).True()
+		gt.Bool(t, slices.Contains(names, "core__create_action")).False()
 	})
 
 	t.Run("the create agent gets neither action nor case-write tools", func(t *testing.T) {
@@ -268,8 +273,10 @@ func TestToolFactoryHonoursAnExplicitSubset(t *testing.T) {
 }
 
 // TestToolFactoryWithdrawsActionToolsInAThreadModeWorkspace pins the rule that a
-// thread-mode workspace manages no Actions: offering the tools would hand the
-// agent something that can only return an error.
+// thread-mode workspace withholds the Action tools from every run whose scope
+// does not grant them (Scope.ThreadModeActions): only the mention turn's prompt
+// describes Actions, so any other agent would be handed tools it was never told
+// how to use.
 //
 // The WORKSPACE decides it, not the case's SlackThreadTS. Keying on the case
 // would give action tools to a thread-mode case whose thread is not set yet —
@@ -295,6 +302,60 @@ func TestToolFactoryWithdrawsActionToolsInAThreadModeWorkspace(t *testing.T) {
 	gt.NoError(t, err).Required()
 
 	gt.Bool(t, hasPrefixIn(toolNames(tools), "core__")).False()
+}
+
+// TestToolFactoryGrantsActionToolsToAThreadModeMentionTurn pins the other half:
+// a scope carrying ThreadModeActions — the thread-mode mention turn, and the
+// sub-agents that inherit its metadata — gets the full action set on a
+// thread-mode workspace.
+func TestToolFactoryGrantsActionToolsToAThreadModeMentionTurn(t *testing.T) {
+	ctx := context.Background()
+	repo := memory.New()
+	ctx = seedCase(t, ctx, repo, &model.Case{
+		Title:          "thread case",
+		SlackChannelID: "C-THREAD",
+		SlackThreadTS:  "1700000000.000100",
+	})
+
+	factory, err := kernel.NewToolFactory(kernel.ToolDeps{
+		Repo:     repo,
+		Registry: testRegistry(threadWorkspace()),
+		ActionUC: stubActionMutator{},
+	})
+	gt.NoError(t, err).Required()
+
+	sc := kernel.Scope{
+		WorkspaceID: "ws-1", CaseID: 1, ActorUserID: "U1",
+		ToolSets:          []string{agent.ToolSetCore},
+		ThreadModeActions: true,
+	}
+
+	t.Run("a sub-agent given the core toolset gets the action writers", func(t *testing.T) {
+		tools, err := factory(ctx, newProcess(kernel.AgentTask, sc))
+		gt.NoError(t, err).Required()
+		names := toolNames(tools)
+		for _, want := range []string{"core__list_actions", "core__create_action", "core__update_action_status", "core__add_action_step"} {
+			gt.Bool(t, slices.Contains(names, want)).True()
+		}
+	})
+
+	t.Run("the mention planner is declared only the action reads", func(t *testing.T) {
+		all := sc
+		all.ToolSets = []string{kernel.ToolSetsAll}
+		tools, err := factory(ctx, newProcess(kernel.AgentCaseThread, all))
+		gt.NoError(t, err).Required()
+		names := toolNames(tools)
+		gt.Bool(t, slices.Contains(names, "core__list_actions")).True()
+		gt.Bool(t, slices.Contains(names, "core__create_action")).False()
+	})
+
+	t.Run("the same scope without the grant gets none", func(t *testing.T) {
+		denied := sc
+		denied.ThreadModeActions = false
+		tools, err := factory(ctx, newProcess(kernel.AgentTask, denied))
+		gt.NoError(t, err).Required()
+		gt.Bool(t, hasPrefixIn(toolNames(tools), "core__")).False()
+	})
 }
 
 // TestToolFactoryBuildsTheJobPalette pins the unattended-run palette against
@@ -781,4 +842,48 @@ func TestToolSetProbeNilReturnsThePaletteUnchanged(t *testing.T) {
 	got, err := probe.Available(context.Background(), kernel.Scope{}, agent.KnownToolSetIDsJob)
 	gt.NoError(t, err).Required()
 	gt.Value(t, got).Equal(agent.KnownToolSetIDsJob)
+}
+
+// TestToolFactoryResolvesMemoToolsForAThreadModeMention pins that the memo
+// toolset the thread-mode mention palette now carries resolves to the memo
+// tools on a thread-mode workspace with memos: the planner is declared the
+// reads, and a task given the memo toolset gets the writer.
+func TestToolFactoryResolvesMemoToolsForAThreadModeMention(t *testing.T) {
+	ctx := context.Background()
+	repo := memory.New()
+	ctx = seedCase(t, ctx, repo, &model.Case{
+		Title:          "thread case",
+		SlackChannelID: "C-THREAD",
+		SlackThreadTS:  "1700000000.000100",
+	})
+
+	ws := threadWorkspace()
+	ws.MemoConfig = &config.MemoConfig{FieldSchema: &config.FieldSchema{Fields: []config.FieldDefinition{
+		{ID: "note", Type: types.FieldTypeText},
+	}}}
+	factory, err := kernel.NewToolFactory(kernel.ToolDeps{
+		Repo:     repo,
+		Registry: testRegistry(ws),
+		MemoUC:   stubMemoMutator{},
+	})
+	gt.NoError(t, err).Required()
+
+	sc := kernel.Scope{WorkspaceID: "ws-1", CaseID: 1, ActorUserID: "U1", ToolSets: []string{kernel.ToolSetsAll}}
+
+	t.Run("the mention planner reads memos", func(t *testing.T) {
+		tools, err := factory(ctx, newProcess(kernel.AgentCaseThread, sc))
+		gt.NoError(t, err).Required()
+		names := toolNames(tools)
+		gt.Bool(t, slices.Contains(names, "memo__list_memos")).True()
+		gt.Bool(t, slices.Contains(names, "memo__get_memo")).True()
+		gt.Bool(t, slices.Contains(names, "memo__apply_memo_changes")).False()
+	})
+
+	t.Run("a task given the memo toolset writes memos", func(t *testing.T) {
+		task := sc
+		task.ToolSets = []string{agent.ToolSetMemo}
+		tools, err := factory(ctx, newProcess(kernel.AgentTask, task))
+		gt.NoError(t, err).Required()
+		gt.Bool(t, slices.Contains(toolNames(tools), "memo__apply_memo_changes")).True()
+	})
 }

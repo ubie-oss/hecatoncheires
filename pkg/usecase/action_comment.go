@@ -15,7 +15,6 @@ import (
 	"github.com/m-mizutani/hecatoncheires/pkg/i18n"
 	"github.com/m-mizutani/hecatoncheires/pkg/service/slack"
 	"github.com/m-mizutani/hecatoncheires/pkg/utils/errutil"
-	goslack "github.com/slack-go/slack"
 )
 
 // commentExcerptMaxRunes caps the one-line preview embedded in the Slack
@@ -351,7 +350,11 @@ func (uc *ActionCommentUseCase) canRead(ctx context.Context, workspaceID string,
 // Best-effort throughout: a failure here never rolls back the comment.
 func (uc *ActionCommentUseCase) notifyCommentCreated(ctx context.Context, workspaceID string, action *model.Action, caseModel *model.Case, comment *model.ActionComment) {
 	ctx = i18n.ContextWithWorkspaceLang(ctx, uc.registry.Language(workspaceID))
-	if uc.slackService == nil || action.SlackMessageTS == "" || caseModel == nil || caseModel.SlackChannelID == "" {
+	if uc.slackService == nil {
+		return
+	}
+	target, ok := resolveActionNotifyTarget(action, caseModel)
+	if !ok {
 		return
 	}
 
@@ -368,29 +371,14 @@ func (uc *ActionCommentUseCase) notifyCommentCreated(ctx context.Context, worksp
 		body += "\n> " + excerpt
 	}
 
-	blocks := []goslack.Block{
-		goslack.NewContextBlock("",
-			goslack.NewTextBlockObject(goslack.MarkdownType, body, false, false),
-		),
+	notice := actionNotice{
+		body:       body,
+		broadcast:  actionCommentBroadcasts,
+		nameAction: true,
+		actionURL:  buildActionWebURL(uc.baseURL, workspaceID, action.CaseID, action.ID),
 	}
-
-	broadcast := actionCommentBroadcasts
-	aggregate := broadcast && uc.slotCoord.enabled()
-
-	var opts []slack.PostThreadOption
-	if broadcast && !aggregate {
-		opts = append(opts, slack.WithBroadcastToChannel())
-	}
-	if _, err := uc.slackService.PostThreadMessage(ctx, caseModel.SlackChannelID, action.SlackMessageTS, blocks, body, opts...); err != nil {
+	if err := postActionNotice(ctx, uc.slackService, uc.slotCoord, target, action, notice); err != nil {
 		errutil.Handle(ctx, err, "failed to post action comment notification")
-		return
-	}
-	if aggregate {
-		uc.slotCoord.enqueueChannelLine(ctx, caseModel.SlackChannelID, slotEntry{
-			ActionMessageTS: action.SlackMessageTS,
-			ActionTitle:     action.Title,
-			Body:            body,
-		})
 	}
 }
 

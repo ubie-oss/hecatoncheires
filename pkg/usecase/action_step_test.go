@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/m-mizutani/gt"
 	"github.com/m-mizutani/hecatoncheires/pkg/domain/model"
@@ -427,4 +428,34 @@ func TestActionStepUseCase_ListAndProgress(t *testing.T) {
 		gt.NoError(t, err).Required()
 		gt.Array(t, listed).Length(1)
 	})
+}
+
+func TestActionStepUseCase_ThreadModeCaseNotifiesInTheCaseThread(t *testing.T) {
+	i18n.Init(i18n.LangEN)
+	repo := memory.New()
+	fake := &threadModeSlackFake{}
+	slot := usecase.NewNotificationSlotCoordinatorForTest(repo.NotificationSlot(), fake, time.Hour, nil)
+	ctx := auth.ContextWithToken(context.Background(), &auth.Token{Sub: "UCREATOR"})
+	c := newThreadModeCase(t, repo)
+
+	actionUC := usecase.NewActionUseCase(repo, threadModeActionsRegistry(true), fake, "", nil)
+	action, err := actionUC.CreateAction(ctx, testWorkspaceID, c.ID, "Sample action", "", "", "", "", nil)
+	gt.NoError(t, err).Required()
+	fake.threadCalls = nil
+
+	stepUC := usecase.NewActionStepUseCase(repo, nil, fake, slot)
+	_, err = stepUC.Add(ctx, usecase.AddActionStepInput{
+		WorkspaceID: testWorkspaceID,
+		ActionID:    action.ID,
+		Title:       "Example step",
+		Actor:       usecase.ActorRef{Kind: usecase.ActorKindSlackUser, ID: "UDOER"},
+	})
+	gt.NoError(t, err).Required()
+
+	// A step addition is broadcast in channel mode; in the case thread it is
+	// a quiet reply and never reaches the channel root or the slot.
+	gt.Array(t, fake.postedChannelIDs).Length(0)
+	gt.Array(t, fake.threadCalls).Length(1).Required()
+	assertQuietCaseThreadReply(t, fake.threadCalls[0])
+	gt.Value(t, fake.threadCalls[0].text).Equal("📌 *Sample action*\n:heavy_plus_sign: <@UDOER> added step \"Example step\"")
 }

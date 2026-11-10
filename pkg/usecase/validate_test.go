@@ -1119,6 +1119,60 @@ func TestValidateDB_ActionStatusInvalid(t *testing.T) {
 	gt.Value(t, issue.Actual).Equal("ABANDONED")
 }
 
+// An Action stored in a thread-mode workspace that does not enable Actions is
+// shown nowhere in the UI, so it is reported; turning [case] actions on clears
+// the report.
+func TestValidateDB_ActionsDisabled(t *testing.T) {
+	ctx := context.Background()
+	for name, enabled := range map[string]bool{"actions off": false, "actions on": true} {
+		t.Run(name, func(t *testing.T) {
+			wsID := "ws-thread-actions"
+			repo := memory.New()
+			registry := model.NewWorkspaceRegistry()
+			registry.Register(&model.WorkspaceEntry{
+				Workspace:       model.Workspace{ID: wsID, Name: "Thread Workspace"},
+				FieldSchema:     &config.FieldSchema{Labels: config.EntityLabels{Case: "Case"}},
+				ActionStatusSet: newValidateTestStatusSet(t),
+				CaseMode:        model.CaseModeThread,
+				CaseStatusSet:   newValidateTestStatusSet(t),
+				CaseActions:     enabled,
+			})
+			uc := usecase.New(repo, registry)
+
+			parent, err := repo.Case().Create(ctx, wsID, &model.Case{
+				Title:          "Thread case",
+				Status:         types.CaseStatusOpen,
+				SlackChannelID: "C-MONITOR",
+				SlackThreadTS:  "1700000000.000100",
+				BoardStatus:    "TRIAGE",
+			})
+			gt.NoError(t, err).Required()
+			first, err := repo.Action().Create(ctx, wsID, &model.Action{
+				CaseID: parent.ID, Title: "First action", Status: types.ActionStatus("TRIAGE"),
+			})
+			gt.NoError(t, err).Required()
+			_, err = repo.Action().Create(ctx, wsID, &model.Action{
+				CaseID: parent.ID, Title: "Second action", Status: types.ActionStatus("WORKING"),
+			})
+			gt.NoError(t, err).Required()
+
+			result, err := uc.ValidateDB(ctx)
+			gt.NoError(t, err).Required()
+			if enabled {
+				gt.Array(t, result.Issues).Length(0)
+				return
+			}
+			gt.Array(t, result.Issues).Length(1).Required()
+			issue := result.Issues[0]
+			gt.Value(t, issue.Kind).Equal(usecase.IssueKindActionsDisabled)
+			gt.Value(t, issue.Count).Equal(int64(2))
+			gt.Value(t, issue.Sample.Kind).Equal(usecase.TargetKindAction)
+			gt.Value(t, issue.Sample.CaseID).Equal(parent.ID)
+			gt.Value(t, issue.Sample.ActionID).Equal(first.ID)
+		})
+	}
+}
+
 func TestValidateDB_MemoFieldValues(t *testing.T) {
 	wsID := "ws-memo"
 	ctx := context.Background()

@@ -39,6 +39,8 @@ const (
 	metaProposalID   = "proposal_id"
 	metaLLMModel     = "llm_model"
 	metaBudget       = "budget_nano_usd"
+
+	metaThreadModeActions = "thread_mode_actions"
 )
 
 // ToolSetsAll is the toolsets value meaning "everything this agent kind is
@@ -139,6 +141,15 @@ type Scope struct {
 	// Budget is the greatest amount this run may spend. Zero means "not
 	// specified", and the deployment's default budget applies.
 	Budget pricing.NanoUSD
+	// ThreadModeActions grants the action (core) toolsets to a run on a
+	// thread-mode workspace, which withholds them by default. Only the
+	// thread-mode mention turn sets it: a person asked for the work, and the
+	// turn is pinned to an existing case. Every other thread-mode run — case
+	// creation, materialize, Jobs, the workspace agent — keeps the default, so
+	// none of them is handed Action tools its prompt does not describe. A child
+	// Process inherits the flag with the metadata, which is what lets the
+	// mention turn's sub-agents carry out the action writes it plans.
+	ThreadModeActions bool
 }
 
 // Validate enforces the invariants the claim path depends on, so a wiring
@@ -237,6 +248,9 @@ func (s Scope) Metadata() map[string]string {
 	if s.Budget > 0 {
 		m[metaBudget] = strconv.FormatInt(int64(s.Budget), 10)
 	}
+	if s.ThreadModeActions {
+		m[metaThreadModeActions] = "1"
+	}
 	return m
 }
 
@@ -270,6 +284,8 @@ func ScopeFrom(m map[string]string) Scope {
 		SlotGated:    m[metaSlotGated] == "1",
 		LLMModel:     m[metaLLMModel],
 		Budget:       pricing.NanoUSD(budget),
+
+		ThreadModeActions: m[metaThreadModeActions] == "1",
 	}
 }
 

@@ -342,6 +342,7 @@ export default function ActionModal({ actionId, onClose }: ActionModalProps) {
               slackMessageTS={action.slackMessageTS}
               slackChannelID={action.case?.slackChannelID}
               slackChannelURL={action.case?.slackChannelURL}
+              slackThreadTS={action.case?.slackThreadTS}
               highlightCommentId={highlightCommentId}
             />
           </div>

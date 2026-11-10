@@ -167,16 +167,142 @@ func resolveActionStatusSet(registry *model.WorkspaceRegistry, workspaceID strin
 	return entry.ActionStatusSet
 }
 
-// ensureCaseAcceptsActions rejects an action write whose parent Case is
-// thread-mode. Thread-mode cases have no Actions (they track progress via the
-// configurable board status); enforcing this at the usecase boundary keeps the
-// invariant watertight for every entry point — GraphQL, Slack modal, agent
-// tools, eval — instead of relying on each tool-wiring site to withhold the
-// action tools. Channel-mode cases (the default) pass through unchanged.
-func ensureCaseAcceptsActions(c *model.Case) error {
+// ensureCaseAcceptsActions rejects putting an Action on c when c's workspace
+// does not have Actions: a thread-mode workspace has them only when [case]
+// actions opts in (model.WorkspaceEntry.ActionsEnabled). The workspace's mode
+// decides it. When the workspace is not registered (no registry wired, or an
+// unknown id) the case's own binding stands in for the mode, and a thread-bound
+// case is refused — the default of the option.
+func (uc *ActionUseCase) ensureCaseAcceptsActions(workspaceID string, c *model.Case) error {
+	enabled := !c.IsThreadBound()
+	if uc.registry != nil {
+		entry, err := uc.registry.Get(workspaceID)
+		switch {
+		case err == nil:
+			enabled = entry.ActionsEnabled()
+		case !errors.Is(err, model.ErrWorkspaceNotFound):
+			return goerr.Wrap(err, "resolve the workspace of the action's case",
+				goerr.V(CaseIDKey, c.ID))
+		}
+	}
+	if !enabled {
+		return goerr.Wrap(ErrCaseActionsDisabled, "this workspace does not enable actions on thread-mode cases",
+			goerr.V(CaseIDKey, c.ID),
+			goerr.V("workspace_id", workspaceID))
+	}
+	return nil
+}
+
+// ActionsEnabled reports whether the Cases of the workspace have Actions,
+// which is what the Web UI reads to show or hide the Related Actions section.
+func (uc *ActionUseCase) ActionsEnabled(_ context.Context, workspaceID string) (bool, error) {
+	if uc.registry == nil {
+		// No workspace configuration to consult: the channel-mode default.
+		return true, nil
+	}
+	entry, err := uc.registry.Get(workspaceID)
+	if err != nil {
+		return false, goerr.Wrap(err, "resolve the workspace", goerr.V("workspace_id", workspaceID))
+	}
+	return entry.ActionsEnabled(), nil
+}
+
+// actionNotifyTarget is where an Action's Slack notifications (change
+// summaries, step / comment / archive notices) are posted.
+type actionNotifyTarget struct {
+	channelID string
+	threadTS  string
+	// inCaseThread is true for an Action of a thread-mode Case. There is no
+	// per-Action card to hang a thread off, so every notification is a reply in
+	// the Case's own thread. That thread is also the case conversation, so the
+	// notifications there stay quiet: each names the Action it is about (several
+	// Actions share the thread), none is broadcast to the channel, and none joins
+	// the channel notification slot (the monitored channel is shared by every
+	// case of the workspace, so a channel-level line would be noise for all of
+	// them).
+	inCaseThread bool
+}
+
+// resolveActionNotifyTarget decides where an Action's notifications go, or
+// reports false when there is nowhere to post: the Case has no Slack channel,
+// or — for a channel-mode Case — the Action has no Slack card yet.
+func resolveActionNotifyTarget(action *model.Action, c *model.Case) (actionNotifyTarget, bool) {
+	if action == nil || c == nil || c.SlackChannelID == "" {
+		return actionNotifyTarget{}, false
+	}
 	if c.IsThreadBound() {
-		return goerr.Wrap(ErrCaseThreadModeNoActions,
-			"thread-mode case cannot have actions", goerr.V(CaseIDKey, c.ID))
+		return actionNotifyTarget{channelID: c.SlackChannelID, threadTS: c.SlackThreadTS, inCaseThread: true}, true
+	}
+	if action.SlackMessageTS == "" {
+		return actionNotifyTarget{}, false
+	}
+	return actionNotifyTarget{channelID: c.SlackChannelID, threadTS: action.SlackMessageTS}, true
+}
+
+// actionLabel renders the compact reference to an Action used by the
+// notifications posted into a thread-mode Case's thread: the action-card emoji
+// followed by the bold title, linked to the WebUI when actionURL is known.
+func actionLabel(action *model.Action, actionURL string) string {
+	escapedTitle := slackTextEscaper.Replace(action.Title)
+	if actionURL != "" {
+		return fmt.Sprintf("%s *<%s|%s>*", actionCardTitleEmoji, actionURL, escapedTitle)
+	}
+	return fmt.Sprintf("%s *%s*", actionCardTitleEmoji, escapedTitle)
+}
+
+// actionNotice is one notification about an Action.
+type actionNotice struct {
+	// body is the mrkdwn text of the notification.
+	body string
+	// broadcast asks for the notification to also surface in the channel
+	// (reply_broadcast, or the notification slot when one is configured). It is
+	// ignored for a thread-mode Case, whose notifications are never broadcast.
+	broadcast bool
+	// nameAction prefixes the body with actionLabel in a thread-mode Case,
+	// where the thread is shared by every Action of the Case. A body that
+	// already names the Action (archive notices) leaves it false.
+	nameAction bool
+	// actionURL is the WebUI link actionLabel uses; empty renders no link.
+	actionURL string
+}
+
+// postActionNotice posts one context-block notification about an Action to
+// target, and folds the channel-side line into the notification slot when the
+// notice is broadcast and a slot is configured. It is the single place that
+// decides how an Action notification looks in each Case mode, shared by the
+// action, step and comment usecases.
+func postActionNotice(ctx context.Context, svc slack.Service, slotCoord *notificationSlotCoordinator, target actionNotifyTarget, action *model.Action, n actionNotice) error {
+	body := n.body
+	broadcast := n.broadcast
+	if target.inCaseThread {
+		if n.nameAction {
+			body = actionLabel(action, n.actionURL) + "\n" + body
+		}
+		broadcast = false
+	}
+
+	blocks := []goslack.Block{
+		goslack.NewContextBlock("",
+			goslack.NewTextBlockObject(goslack.MarkdownType, body, false, false),
+		),
+	}
+	aggregate := broadcast && slotCoord.enabled()
+
+	var opts []slack.PostThreadOption
+	if broadcast && !aggregate {
+		opts = append(opts, slack.WithBroadcastToChannel())
+	}
+	if _, err := svc.PostThreadMessage(ctx, target.channelID, target.threadTS, blocks, body, opts...); err != nil {
+		return goerr.Wrap(err, "failed to post action notification",
+			goerr.V(ActionIDKey, action.ID),
+			goerr.V(CaseIDKey, action.CaseID))
+	}
+	if aggregate {
+		slotCoord.enqueueChannelLine(ctx, target.channelID, slotEntry{
+			ActionMessageTS: action.SlackMessageTS,
+			ActionTitle:     action.Title,
+			Body:            n.body,
+		})
 	}
 	return nil
 }
@@ -196,7 +322,7 @@ func (uc *ActionUseCase) CreateAction(ctx context.Context, workspaceID string, c
 		return nil, err
 	}
 
-	if err := ensureCaseAcceptsActions(caseModel); err != nil {
+	if err := uc.ensureCaseAcceptsActions(workspaceID, caseModel); err != nil {
 		return nil, err
 	}
 
@@ -247,7 +373,7 @@ func (uc *ActionUseCase) CreateAction(ctx context.Context, workspaceID string, c
 	}
 
 	if uc.slackService != nil && caseModel.SlackChannelID != "" {
-		posted, postErr := uc.postSlackMessageForAction(ctx, workspaceID, created, caseModel)
+		posted, postErr := uc.postSlackMessageForAction(ctx, workspaceID, created, caseModel, tokenActorRef(ctx))
 		if postErr != nil {
 			errutil.Handle(ctx, postErr, "failed to post Slack notification for action")
 		} else {
@@ -306,7 +432,7 @@ func (uc *ActionUseCase) PostSlackMessageToAction(ctx context.Context, workspace
 			goerr.V(CaseIDKey, action.CaseID))
 	}
 
-	updated, err := uc.postSlackMessageForAction(ctx, workspaceID, action, parentCase)
+	updated, err := uc.postSlackMessageForAction(ctx, workspaceID, action, parentCase, tokenActorRef(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -322,13 +448,40 @@ func (uc *ActionUseCase) PostSlackMessageToAction(ctx context.Context, workspace
 //   - diagnosis.UseCase.FixUnsentActions (batch repair; per-action error
 //     bucketed into the report)
 //
+// The message depends on the Case mode:
+//   - channel-mode: the Action card (title, description, status / assignee
+//     selects) at the root of the Case channel. Its timestamp anchors the
+//     Action's own thread, where every later notification is posted.
+//   - thread-mode: a one-line context-block notice ("X created action ...")
+//     replying in the Case thread — the same quiet format as the change
+//     notifications, so creating Actions does not flood the case conversation.
+//     Its timestamp is recorded so the Action counts as posted (the
+//     fix-unsent-action sweep and the WebUI "Post to Slack" button key on it);
+//     it is never refreshed into a card.
+//
+// actor is who created the Action; it is named only in the thread-mode notice.
+//
 // Preconditions: uc.slackService != nil and caseModel.SlackChannelID != "".
 // Callers MUST verify these and decide their own policy (skip / error /
 // degrade) for the missing-channel case.
-func (uc *ActionUseCase) postSlackMessageForAction(ctx context.Context, workspaceID string, action *model.Action, caseModel *model.Case) (*model.Action, error) {
+func (uc *ActionUseCase) postSlackMessageForAction(ctx context.Context, workspaceID string, action *model.Action, caseModel *model.Case, actor ActorRef) (*model.Action, error) {
 	actionURL := uc.actionWebURL(workspaceID, action.CaseID, action.ID)
-	text, att := uc.buildActionMessagePayload(ctx, workspaceID, action, actionURL)
-	ts, postErr := uc.slackService.PostMessageWithAttachment(ctx, caseModel.SlackChannelID, text, att)
+
+	var ts string
+	var postErr error
+	if caseModel.IsThreadBound() {
+		ctx = i18n.ContextWithWorkspaceLang(ctx, uc.registry.Language(workspaceID))
+		body := i18n.T(ctx, i18n.MsgActionCreated, renderActor(ctx, actor), actionLabel(action, actionURL))
+		blocks := []goslack.Block{
+			goslack.NewContextBlock("",
+				goslack.NewTextBlockObject(goslack.MarkdownType, body, false, false),
+			),
+		}
+		ts, postErr = uc.slackService.PostThreadMessage(ctx, caseModel.SlackChannelID, caseModel.SlackThreadTS, blocks, body)
+	} else {
+		text, att := uc.buildActionMessagePayload(ctx, workspaceID, action, actionURL)
+		ts, postErr = uc.slackService.PostMessageWithAttachment(ctx, caseModel.SlackChannelID, text, att)
+	}
 	if postErr != nil {
 		return action, goerr.Wrap(postErr, "failed to post Slack message for action",
 			goerr.V(ActionIDKey, action.ID),
@@ -345,6 +498,16 @@ func (uc *ActionUseCase) postSlackMessageForAction(ctx context.Context, workspac
 			goerr.V(ActionIDKey, action.ID))
 	}
 	return updated, nil
+}
+
+// tokenActorRef names the caller of a token-driven write (GraphQL / WebUI) as
+// a Slack-user actor, or the system when the context carries no token (agent
+// tools, internal callers).
+func tokenActorRef(ctx context.Context) ActorRef {
+	if token, err := auth.TokenFromContext(ctx); err == nil && token.Sub != "" {
+		return ActorRef{Kind: ActorKindSlackUser, ID: token.Sub}
+	}
+	return ActorRef{Kind: ActorKindSystem}
 }
 
 // UpdateAction is the single entry point for mutating an Action. All transports
@@ -383,9 +546,9 @@ func (uc *ActionUseCase) UpdateAction(ctx context.Context, workspaceID string, i
 				goerr.V(CaseIDKey, *in.CaseID),
 				goerr.V(ActionIDKey, in.ID))
 		}
-		// Reparenting must not move an action into a thread-mode case, which has
+		// Reparenting must not move an action into a case whose workspace has
 		// no Actions. Same boundary invariant as CreateAction.
-		if err := ensureCaseAcceptsActions(newCase); err != nil {
+		if err := uc.ensureCaseAcceptsActions(workspaceID, newCase); err != nil {
 			return nil, err
 		}
 	}
@@ -632,7 +795,11 @@ func (uc *ActionUseCase) recordArchiveEvent(ctx context.Context, workspaceID str
 // what. Best-effort throughout.
 func (uc *ActionUseCase) notifyArchiveOnSlack(ctx context.Context, workspaceID string, action *model.Action, caseModel *model.Case, kind types.ActionEventKind, actor ActorRef) {
 	ctx = i18n.ContextWithWorkspaceLang(ctx, uc.registry.Language(workspaceID))
-	if uc.slackService == nil || action.SlackMessageTS == "" || caseModel == nil || caseModel.SlackChannelID == "" {
+	if uc.slackService == nil {
+		return
+	}
+	target, ok := resolveActionNotifyTarget(action, caseModel)
+	if !ok {
 		return
 	}
 
@@ -648,13 +815,10 @@ func (uc *ActionUseCase) notifyArchiveOnSlack(ctx context.Context, workspaceID s
 	default:
 		return
 	}
-	blocks := []goslack.Block{
-		goslack.NewContextBlock("",
-			goslack.NewTextBlockObject(goslack.MarkdownType, msg, false, false),
-		),
-	}
-	if _, postErr := uc.slackService.PostThreadMessage(ctx, caseModel.SlackChannelID, action.SlackMessageTS, blocks, msg); postErr != nil {
-		errutil.Handle(ctx, postErr, "failed to post action archive notification")
+	// The archive notice already names the Action, so it needs no label in a
+	// thread-mode Case either.
+	if err := postActionNotice(ctx, uc.slackService, nil, target, action, actionNotice{body: msg}); err != nil {
+		errutil.Handle(ctx, err, "failed to post action archive notification")
 	}
 }
 
@@ -800,7 +964,10 @@ func (uc *ActionUseCase) refreshSlackMessage(ctx context.Context, workspaceID st
 		errutil.Handle(ctx, err, "failed to get case for Slack message update")
 		return
 	}
-	if caseModel.SlackChannelID == "" {
+	// A thread-mode Case has no Action card: the message recorded on the Action
+	// is the one-line creation notice in the Case thread, which must not be
+	// turned into a card.
+	if caseModel.SlackChannelID == "" || caseModel.IsThreadBound() {
 		return
 	}
 
@@ -817,7 +984,7 @@ func (uc *ActionUseCase) refreshSlackMessage(ctx context.Context, workspaceID st
 // posts so they don't double-count in the ActionEvent feed.
 func (uc *ActionUseCase) postActionChangeNotification(ctx context.Context, workspaceID string, before, after *model.Action, actor ActorRef) {
 	ctx = i18n.ContextWithWorkspaceLang(ctx, uc.registry.Language(workspaceID))
-	if uc.slackService == nil || after.SlackMessageTS == "" {
+	if uc.slackService == nil {
 		return
 	}
 
@@ -826,7 +993,8 @@ func (uc *ActionUseCase) postActionChangeNotification(ctx context.Context, works
 		errutil.Handle(ctx, err, "failed to get case for Slack change notification")
 		return
 	}
-	if caseModel.SlackChannelID == "" {
+	target, ok := resolveActionNotifyTarget(after, caseModel)
+	if !ok {
 		return
 	}
 
@@ -854,11 +1022,6 @@ func (uc *ActionUseCase) postActionChangeNotification(ctx context.Context, works
 	}
 
 	body := strings.Join(lines, "\n")
-	blocks := []goslack.Block{
-		goslack.NewContextBlock("",
-			goslack.NewTextBlockObject(goslack.MarkdownType, body, false, false),
-		),
-	}
 
 	var kinds []types.ActionEventKind
 	if before.Title != after.Title {
@@ -870,24 +1033,15 @@ func (uc *ActionUseCase) postActionChangeNotification(ctx context.Context, works
 	if before.AssigneeID != after.AssigneeID {
 		kinds = append(kinds, types.ActionEventAssigneeChanged)
 	}
-	broadcast := shouldBroadcastAnyActionEvent(kinds...)
-	aggregate := broadcast && uc.slotCoord.enabled()
 
-	var opts []slack.PostThreadOption
-	if broadcast && !aggregate {
-		opts = append(opts, slack.WithBroadcastToChannel())
+	notice := actionNotice{
+		body:       body,
+		broadcast:  shouldBroadcastAnyActionEvent(kinds...),
+		nameAction: true,
+		actionURL:  uc.actionWebURL(workspaceID, after.CaseID, after.ID),
 	}
-
-	if _, postErr := uc.slackService.PostThreadMessage(ctx, caseModel.SlackChannelID, after.SlackMessageTS, blocks, body, opts...); postErr != nil {
-		errutil.Handle(ctx, postErr, "failed to post action change notification")
-		return
-	}
-	if aggregate {
-		uc.slotCoord.enqueueChannelLine(ctx, caseModel.SlackChannelID, slotEntry{
-			ActionMessageTS: after.SlackMessageTS,
-			ActionTitle:     after.Title,
-			Body:            body,
-		})
+	if err := postActionNotice(ctx, uc.slackService, uc.slotCoord, target, after, notice); err != nil {
+		errutil.Handle(ctx, err, "failed to post action change notification")
 	}
 }
 
