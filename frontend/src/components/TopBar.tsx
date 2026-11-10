@@ -24,6 +24,7 @@ function useBreadcrumbs(): Crumb[] {
   const top = parts[0]
   const sectionLabel: Record<string, string> = {
     cases: t('navCases'),
+    board: t('navBoard'),
     actions: t('navActions'),
     sources: t('navSources'),
   }

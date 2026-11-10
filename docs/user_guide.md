@@ -55,7 +55,8 @@ The Case detail **Back** button also restores the originating list's fields.
 | Either category | `/ws/support/cases?field.category=it&field.category=sales` |
 | Either category and either priority | `/ws/support/cases?field.category=it&field.category=sales&field.priority=high&field.priority=urgent` |
 | Category and priority, closed Cases | `/ws/support/cases?status=closed&field.category=it&field.priority=high` |
-| The same category on a board | `/ws/support/actions?field.category=it` |
+| The same category on the Action board | `/ws/support/actions?field.category=it` |
+| The same category on the Case board (thread mode) | `/ws/support/board?field.category=it` |
 
 Use `field.<field-id>=<value>` and repeat the parameter for additional values;
 values are not split on commas. Use stable field / option **IDs**, not display

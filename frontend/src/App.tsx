@@ -6,6 +6,7 @@ import CaseAgent from './pages/CaseAgent'
 import JobRunLogDetail from './pages/JobRunLogDetail'
 import MemoDetail from './pages/MemoDetail'
 import ActionList from './pages/ActionList'
+import CaseBoard from './pages/CaseBoard'
 import AssistLogList from './pages/AssistLogList'
 import SourceList from './pages/SourceList'
 import SourceDetail from './pages/SourceDetail'
@@ -39,6 +40,7 @@ function App() {
           <Route path="cases/:id/agent" element={<CaseAgent />} />
           <Route path="cases/:id/agent/runs/:runId" element={<JobRunLogDetail />} />
           <Route path="cases/:id/memos/:memoId" element={<MemoDetail />} />
+          <Route path="board" element={<CaseBoard />} />
           <Route path="actions" element={<ActionList />} />
           <Route path="actions/:actionId" element={<ActionList />} />
           <Route path="actions/case/:caseId" element={<ActionList />} />

@@ -30,6 +30,7 @@ export function Icon({ d, size = 16, sw = 1.6, fill = 'none', style, ...rest }: 
 type P = Omit<IconProps, 'd'>
 export const IconCases = (p: P) => <Icon {...p} d="M3 7h18M5 7v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7M9 7V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2" />
 export const IconActions = (p: P) => <Icon {...p} d="M3 6h13M3 12h13M3 18h9M19 5l2 2-3 3-2-2zM18 11l3 3-5 5h-3v-3z" />
+export const IconBoard = (p: P) => <Icon {...p} d="M4 4h4v16H4zM10 4h4v10h-4zM16 4h4v13h-4z" />
 export const IconSources = (p: P) => <Icon {...p} d="M3 6c0 1.7 4 3 9 3s9-1.3 9-3-4-3-9-3-9 1.3-9 3zM3 6v12c0 1.7 4 3 9 3s9-1.3 9-3V6M3 12c0 1.7 4 3 9 3s9-1.3 9-3" />
 export const IconBell = (p: P) => <Icon {...p} d="M18 16v-5a6 6 0 1 0-12 0v5l-2 2v1h16v-1l-2-2zM10 21h4" />
 export const IconChevDown = (p: P) => <Icon {...p} d="M6 9l6 6 6-6" />

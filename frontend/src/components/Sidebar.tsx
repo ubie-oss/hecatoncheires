@@ -8,15 +8,26 @@ import { GET_ACTIONS } from '../graphql/action'
 import { GET_SOURCES } from '../graphql/source'
 import { GET_KNOWLEDGES } from '../graphql/knowledge'
 import { useCaseStatuses } from '../hooks/useCaseStatuses'
+import { useActionsEnabled } from '../hooks/useActionsEnabled'
 import { Avatar } from './Primitives'
+import type { ComponentType } from 'react'
 import {
   IconCases,
   IconActions,
+  IconBoard,
   IconSources,
   IconKnowledge,
   IconSettings,
   IconUser,
 } from './Icons'
+
+interface NavItem {
+  id: string
+  label: string
+  Icon: ComponentType<{ size?: number }>
+  to: string
+  count: number | null
+}
 
 interface NavCount {
   cases: number | null
@@ -56,19 +67,22 @@ export default function Sidebar() {
   const { t } = useTranslation()
   const wsPrefix = currentWorkspace ? `/ws/${currentWorkspace.id}` : ''
   const counts = useNavCounts(currentWorkspace?.id)
-  // In thread mode the /actions route renders a Case Kanban (not Actions), so
-  // the nav item is labelled "Board" and counts cases instead of actions.
+  // A thread-mode workspace (one with a Case status set) gets the Case board.
+  // Actions are listed only where the workspace's Cases have them: always in
+  // channel mode, and in thread mode when [case] actions is on. Until the
+  // answer arrives, fall back to the mode so a channel-mode workspace does not
+  // flash without its Actions entry.
   const { isThreadMode } = useCaseStatuses(currentWorkspace?.id)
+  const actionsEnabled = useActionsEnabled(currentWorkspace?.id) ?? !isThreadMode
 
-  const items = [
+  const items: NavItem[] = [
     { id: 'cases',      label: t('navCases'),      Icon: IconCases,     to: `${wsPrefix}/cases`,      count: counts.cases },
-    {
-      id: 'actions',
-      label: isThreadMode ? t('navBoard') : t('navActions'),
-      Icon: IconActions,
-      to: `${wsPrefix}/actions`,
-      count: isThreadMode ? counts.cases : counts.actions,
-    },
+    ...(isThreadMode
+      ? [{ id: 'board', label: t('navBoard'), Icon: IconBoard, to: `${wsPrefix}/board`, count: counts.cases }]
+      : []),
+    ...(actionsEnabled
+      ? [{ id: 'actions', label: t('navActions'), Icon: IconActions, to: `${wsPrefix}/actions`, count: counts.actions }]
+      : []),
     { id: 'sources',    label: t('navSources'),    Icon: IconSources,   to: `${wsPrefix}/sources`,    count: counts.sources },
     { id: 'knowledge',  label: t('navKnowledge'),  Icon: IconKnowledge, to: `${wsPrefix}/knowledge`,  count: counts.knowledge },
   ]

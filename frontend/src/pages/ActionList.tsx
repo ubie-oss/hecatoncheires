@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { useNavigate, useParams, useLocation } from 'react-router'
+import { Navigate, useNavigate, useParams, useLocation } from 'react-router'
 import { useMutation, useQuery } from '@apollo/client'
 import { BULK_ARCHIVE_ACTIONS, GET_ACTIONS_BY_CASE, GET_OPEN_CASE_ACTIONS, UPDATE_ACTION } from '../graphql/action'
 import { GET_FIELD_CONFIGURATION } from '../graphql/fieldConfiguration'
@@ -8,7 +8,7 @@ import { useWorkspace } from '../contexts/workspace-context'
 import { useTranslation } from '../i18n'
 import { useActionStatuses } from '../hooks/useActionStatuses'
 import { useCaseStatuses } from '../hooks/useCaseStatuses'
-import CaseKanban from './CaseKanban'
+import { useActionsEnabled } from '../hooks/useActionsEnabled'
 import {
   actionStatusColorStyle,
   actionStatusSlug,
@@ -77,8 +77,11 @@ export default function ActionList() {
   // id until they fall out of the board for real.
   const [archivingIds, setArchivingIds] = useState<Set<number>>(new Set())
   const { statuses, isClosed, label } = useActionStatuses(currentWorkspace?.id)
-  // Thread-mode workspaces show a Case board instead of the Action board.
+  // A thread-mode workspace has Actions only when it enables them; without
+  // them its /actions URL (which used to render the Case board) forwards to
+  // the Case board at /board.
   const { isThreadMode } = useCaseStatuses(currentWorkspace?.id)
+  const actionsEnabled = useActionsEnabled(currentWorkspace?.id)
 
   const filterCaseId = useMemo(() => {
     if (!caseId) return null
@@ -226,10 +229,8 @@ export default function ActionList() {
 
   const openCount = filtered.filter((a) => !isClosed(a.status)).length
 
-  // Thread-mode workspaces bind the configurable status to the Case itself, so
-  // the board renders Cases instead of Actions.
-  if (isThreadMode) {
-    return <CaseKanban />
+  if (isThreadMode && actionsEnabled === false && currentWorkspace) {
+    return <Navigate to={`/ws/${currentWorkspace.id}/board${queryString}`} replace />
   }
 
   return (

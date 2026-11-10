@@ -709,9 +709,8 @@ export default function CaseDetail() {
                 </>
               )}
               <span className="spacer" />
-              {/* A thread-mode workspace's /actions route is the Case board,
-                  not an Action board, so there is no action list to open. */}
-              {!threadMode && (
+              {/* The section only renders when the workspace has Actions, and
+                  then its /actions route is always the Action board. */}
               <Button
                 size="sm"
                 variant="ghost"
@@ -721,7 +720,6 @@ export default function CaseDetail() {
               >
                 {t('linkOpenInActionList')}
               </Button>
-              )}
               {actionView === 'open' && (
                 <Button
                   size="sm"

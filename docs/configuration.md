@@ -1219,8 +1219,10 @@ color = "success"
 emoji = "✅"
 ```
 
-The Kanban board renders one column per `[[case.status]]` for thread-mode
-workspaces; dragging a Case into a `closed` column closes the Case. The
+The Case board (`/ws/<workspace>/board`, the **Board** entry of the sidebar)
+renders one column per `[[case.status]]` for thread-mode workspaces; dragging a
+Case into a `closed` column closes the Case. A channel-mode workspace has no
+Case board, and its `/board` URL forwards to the Action board. The
 investigation agent can also move a Case to a closed status when a mention
 indicates the issue is resolved.
 
@@ -1242,8 +1244,12 @@ any entry point) is rejected, and its Cases' detail pages show no Related
 Actions section. Turning it off after Actions were created leaves them stored
 but shown nowhere in the UI; `validate --check-db` reports them as
 `action_actions_disabled` (see [CLI → validate](cli.md#what---check-db-checks)).
-The thread-mode Action board is unaffected either way: the board of a
-thread-mode workspace always lists Cases. How these Actions are announced in
+The option also decides the workspace's **Actions** sidebar entry. With it on,
+the sidebar lists both **Board** (the Case board at `/ws/<workspace>/board`)
+and **Actions** (the Action board at `/ws/<workspace>/actions`, the same board a
+channel-mode workspace has), and the Related Actions section links to the
+Action board filtered to the Case. With it off, the sidebar shows only
+**Board**, and the `/actions` URL forwards to the Case board. How these Actions are announced in
 Slack is described in [Slack → Actions in thread mode](slack.md#actions-in-thread-mode).
 
 ### Case trigger (thread mode)
