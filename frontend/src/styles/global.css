@@ -1219,19 +1219,24 @@ html[data-theme="dark"] { color-scheme: dark; }
   align-items: start;
 }
 
-.h-section + .h-section { margin-top: 28px; }
+.h-section + .h-section { margin-top: var(--sp-8); }
+/* Main-column section header on the case detail page. The rule under the
+   header spans the column so each section (Description, Markdown fields,
+   Memos, Related Actions) stays visually separated from long body text. */
 .h-section-h {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-bottom: 12px;
+  margin-bottom: var(--sp-3);
+  padding-bottom: var(--sp-2);
+  border-bottom: 1px solid var(--line-strong);
 }
 .h-section-h .h-section-title {
-  font-size: 11px;
-  font-weight: 600;
+  font-size: var(--t-base);
+  font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: var(--fg-soft);
+  color: var(--fg);
 }
 .h-section-h .h-section-progress {
   font-size: 11px;
