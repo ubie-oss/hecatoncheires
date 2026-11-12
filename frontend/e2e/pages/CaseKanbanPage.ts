@@ -2,9 +2,9 @@ import { Page, Locator } from '@playwright/test';
 import { BasePage } from './BasePage';
 
 /**
- * Page Object for the thread-mode Case Kanban board. The board is reached via
- * the same /ws/:id/actions route, which branches to the Case board when the
- * workspace is in thread mode (caseStatusConfig is non-null).
+ * Page Object for the thread-mode Case Kanban board, served at /ws/:id/board.
+ * The workspace's /actions route is the Action board when the workspace has
+ * Actions, and forwards to /board when it does not.
  */
 export class CaseKanbanPage extends BasePage {
   private readonly board: Locator;
@@ -20,7 +20,7 @@ export class CaseKanbanPage extends BasePage {
   }
 
   async navigate(workspaceId: string): Promise<void> {
-    await this.goto(`/ws/${workspaceId}/actions`);
+    await this.goto(`/ws/${workspaceId}/board`);
   }
 
   async waitForBoardLoad(): Promise<void> {

@@ -7,6 +7,8 @@ import { I18nProvider } from '../i18n'
 import { BULK_ARCHIVE_ACTIONS, GET_ACTIONS_BY_CASE, GET_OPEN_CASE_ACTIONS } from '../graphql/action'
 import { GET_FIELD_CONFIGURATION } from '../graphql/fieldConfiguration'
 import { GET_CASES } from '../graphql/case'
+import { GET_CASE_STATUS_CONFIG } from '../graphql/caseStatus'
+import { GET_ACTIONS_ENABLED } from '../graphql/action'
 import ActionList from './ActionList'
 
 // Pin the workspace context so the page renders without a real fetch.
@@ -428,5 +430,46 @@ describe('ActionList case field filters', () => {
     fireEvent.click(screen.getByTestId('case-field-filters-button'))
     fireEvent.click(screen.getByTestId('case-field-filters-clear'))
     expect(await screen.findByText('Excluded action')).toBeInTheDocument()
+  })
+})
+
+const threadModeStatusMock: MockedResponse = {
+  request: { query: GET_CASE_STATUS_CONFIG, variables: { workspaceId: 'risk' } },
+  result: {
+    data: {
+      caseStatusConfig: {
+        __typename: 'ActionConfig',
+        initial: 'triage',
+        closed: ['done'],
+        statuses: [
+          { __typename: 'ActionStatusDefinition', id: 'triage', name: 'Triage', description: null, color: 'idle', emoji: null },
+          { __typename: 'ActionStatusDefinition', id: 'done', name: 'Done', description: null, color: 'success', emoji: null },
+        ],
+      },
+    },
+  },
+}
+
+function actionsEnabledMock(enabled: boolean): MockedResponse {
+  return {
+    request: { query: GET_ACTIONS_ENABLED, variables: { workspaceId: 'risk' } },
+    result: { data: { actionsEnabled: enabled } },
+  }
+}
+
+describe('ActionList in a thread-mode workspace', () => {
+  it('renders the Action board when the workspace enables actions', async () => {
+    renderAt('/ws/risk/actions', fieldConfigMock, [threadModeStatusMock, actionsEnabledMock(true)])
+    await waitFor(() => {
+      expect(screen.getAllByTestId('action-card')).toHaveLength(3)
+    })
+    expect(lastLocation).toBe('/ws/risk/actions')
+  })
+
+  it('forwards to the Case board, keeping the query, when the workspace leaves actions off', async () => {
+    renderAt('/ws/risk/actions?field.category=bug', fieldConfigMock, [threadModeStatusMock, actionsEnabledMock(false)])
+    await waitFor(() => {
+      expect(lastLocation).toBe('/ws/risk/board?field.category=bug')
+    })
   })
 })

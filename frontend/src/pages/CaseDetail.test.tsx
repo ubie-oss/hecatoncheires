@@ -325,11 +325,12 @@ describe('CaseDetail related actions section', () => {
     })
   })
 
-  it('is shown in a thread-mode workspace that enables actions, without the action-list link', async () => {
+  it('is shown in a thread-mode workspace that enables actions, with the action-list link', async () => {
     renderDetail([getCaseMock('OPEN', null), ...supportingMocks([], { threadMode: true, actionsEnabled: true })])
     await screen.findByText('Suspicious login')
     await screen.findByTestId('aside-board-status')
     expect(await screen.findByTestId('add-action-button')).toBeInTheDocument()
-    expect(screen.queryByTestId('case-open-in-actions')).toBeNull()
+    // /actions is the Action board in every workspace that has Actions.
+    expect(screen.getByTestId('case-open-in-actions')).toBeInTheDocument()
   })
 })

@@ -34,7 +34,7 @@ function setup(path: string) {
 
 describe('CaseKanban field filters', () => {
   it('restores a shared URL, groups only matching cards and updates counts', async () => {
-    setup('/ws/review/actions?field.category=it')
+    setup('/ws/review/board?field.category=it')
     expect(await screen.findByText('#1 IT case')).toBeInTheDocument()
     expect(screen.getByText('#3 Closed IT case')).toBeInTheDocument()
     expect(screen.queryByText('#2 Sales case')).toBeNull()
@@ -45,7 +45,7 @@ describe('CaseKanban field filters', () => {
   })
 
   it('selects multiple categories and clears the URL without dropping other parameters', async () => {
-    setup('/ws/review/actions?custom=keep&field.category=it')
+    setup('/ws/review/board?custom=keep&field.category=it')
     await screen.findByText('#1 IT case')
     fireEvent.click(screen.getByTestId('case-field-filters-button'))
     fireEvent.keyDown(screen.getByRole('combobox', { name: 'Category' }), { key: 'ArrowDown' })
