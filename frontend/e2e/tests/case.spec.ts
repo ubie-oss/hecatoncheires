@@ -804,6 +804,47 @@ test.describe('Case Management', () => {
     await expect(page.getByTestId('case-field-runbook').getByRole('heading', { level: 2, name: 'Steps' })).toBeVisible();
   });
 
+  // Long description / markdown text used to swallow the small, muted section
+  // labels. Each main-column section header carries a rule spanning the column
+  // so the boundary between sections stays visible.
+  test('should separate main-column sections with a full-width header rule', async ({ page }) => {
+    const caseListPage = new CaseListPage(page);
+    const caseFormPage = new CaseFormPage(page);
+    const caseDetailPage = new CaseDetailPage(page);
+
+    const title = `Section Header Case ${Date.now()}`;
+    await caseListPage.clickNewCaseButton();
+    await caseFormPage.createCase({ title, description: 'Placeholder text.', customFields: { category: 'task' } });
+    await caseListPage.waitForTableLoad();
+    await caseListPage.fillSearchFilter(title);
+    await caseListPage.clickCaseByTitle(title);
+    await caseDetailPage.waitForPageLoad();
+
+    const descriptionSection = page.locator('section', { has: page.getByTestId('case-description') });
+    const markdownSection = page.getByTestId('case-field-runbook');
+    for (const section of [descriptionSection, markdownSection]) {
+      const header = section.locator('.h-section-h').first();
+      await expect(header).toBeVisible();
+      await expect(header).toHaveCSS('border-bottom-style', 'solid');
+      await expect(header).toHaveCSS('border-bottom-width', '1px');
+
+      // The rule spans the section (i.e. the main column), not just the label.
+      const headerBox = await header.boundingBox();
+      const sectionBox = await section.boundingBox();
+      expect(headerBox).not.toBeNull();
+      expect(sectionBox).not.toBeNull();
+      expect(Math.abs(headerBox!.width - sectionBox!.width)).toBeLessThan(1);
+
+      // The label is drawn in the body text color, not the muted one.
+      const title = header.locator('.h-section-title').first();
+      const [titleColor, bodyColor] = await Promise.all([
+        title.evaluate((el) => getComputedStyle(el).color),
+        page.locator('body').evaluate((el) => getComputedStyle(el).color),
+      ]);
+      expect(titleColor).toBe(bodyColor);
+    }
+  });
+
   // Archiving takes a CLOSED case out of the Closed tab and the board without
   // deleting it. The round trip is what matters: the case has to come back.
   test('should archive a closed case in bulk and restore it from the Archived tab', async ({ page }) => {
