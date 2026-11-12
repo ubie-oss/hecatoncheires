@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -23,6 +25,7 @@ import (
 	"github.com/m-mizutani/hecatoncheires/pkg/agent/budget"
 	"github.com/m-mizutani/hecatoncheires/pkg/agent/interaction"
 	agentkernel "github.com/m-mizutani/hecatoncheires/pkg/agent/kernel"
+	"github.com/m-mizutani/hecatoncheires/pkg/agent/tool/core"
 	"github.com/m-mizutani/hecatoncheires/pkg/domain/interfaces"
 	"github.com/m-mizutani/hecatoncheires/pkg/domain/model"
 	"github.com/m-mizutani/hecatoncheires/pkg/domain/model/slack"
@@ -3465,4 +3468,62 @@ func (e *payloadEmittingExecutor) Execute(ctx context.Context, req jobagent.Exec
 	toolCtx := h.StartToolExec(ctx, "search_tool", map[string]any{"query": e.marker})
 	h.EndToolExec(toolCtx, map[string]any{"answer": e.marker}, nil)
 	return &jobagent.ExecuteResult{Status: jobagent.ExecuteStatusSuccess}, nil
+}
+
+type stubCaseRefReader struct{ core.CaseRefReader }
+
+// TestCoreTools pins which core tools an in-process Job tool builder hands a
+// run: the Job-safe action set in channel mode, the action and case_ref reads
+// in a thread-mode workspace enabling [case] actions, and the case_ref lookups
+// alone in any other thread-mode one.
+func TestCoreTools(t *testing.T) {
+	deps := core.Deps{WorkspaceID: "ws", CaseID: 1, CaseRefUC: stubCaseRefReader{}}
+	namesOf := func(ws *model.WorkspaceEntry) []string {
+		var names []string
+		for _, tl := range job.CoreTools(ws, deps) {
+			names = append(names, tl.Spec().Name)
+		}
+		sort.Strings(names)
+		return names
+	}
+
+	t.Run("channel mode gets the Job-safe set", func(t *testing.T) {
+		names := namesOf(&model.WorkspaceEntry{Workspace: model.Workspace{ID: "ws"}})
+		gt.Array(t, names).Equal([]string{
+			"core__add_action_step",
+			"core__create_action",
+			"core__get_action",
+			"core__get_referenceable_cases",
+			"core__list_actions",
+			"core__rename_action_step",
+			"core__search_referenceable_cases",
+			"core__set_action_assignee",
+			"core__set_action_step_done",
+			"core__update_action",
+			"core__update_action_status",
+		})
+	})
+
+	t.Run("no workspace reads as channel mode", func(t *testing.T) {
+		gt.Bool(t, slices.Contains(namesOf(nil), "core__create_action")).True()
+	})
+
+	t.Run("thread mode with [case] actions gets the reads only", func(t *testing.T) {
+		names := namesOf(&model.WorkspaceEntry{
+			Workspace: model.Workspace{ID: "ws"}, CaseMode: model.CaseModeThread, CaseActions: true,
+		})
+		gt.Array(t, names).Equal([]string{
+			"core__get_action",
+			"core__get_referenceable_cases",
+			"core__list_actions",
+			"core__search_referenceable_cases",
+		})
+	})
+
+	t.Run("thread mode without [case] actions gets the case_ref lookups only", func(t *testing.T) {
+		names := namesOf(&model.WorkspaceEntry{
+			Workspace: model.Workspace{ID: "ws"}, CaseMode: model.CaseModeThread,
+		})
+		gt.Array(t, names).Equal([]string{"core__get_referenceable_cases", "core__search_referenceable_cases"})
+	})
 }

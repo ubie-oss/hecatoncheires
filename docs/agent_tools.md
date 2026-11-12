@@ -301,7 +301,7 @@ the mention agent close a case?" (yes — see [Guardrails](#guardrails)).
 
 | Tool group | Mention agent (channel-mode case) | `assist` batch | Job — channel-mode | Job — thread-mode | Thread-case investigation | Proposal sub-agent (case draft) |
 |------------|:---:|:---:|:---:|:---:|:---:|:---:|
-| `core` read + Actions (`actionwriter`) | ✓ (full, incl. archive / delete-step) | ✓ (full) | ✓ (Job subset, no archive / delete-step) | — | ✓ (full, mention turns of a workspace with `[case] actions = true` only; the planner reads, its tasks write) | read-only `core__list_actions` / `core__get_action` |
+| `core` read + Actions (`actionwriter`) | ✓ (full, incl. archive / delete-step) | ✓ (full) | ✓ (Job subset, no archive / delete-step) | read-only: case_ref lookups always; `core__list_actions` / `core__get_action` with `[case] actions = true` | ✓ (full, mention turns of a workspace with `[case] actions = true` only; the planner reads, its tasks write) | read-only `core__list_actions` / `core__get_action` |
 | `case__*` (casewriter) | ✓ | — | ✓ | ✓ | ✓ (mention turns only; no case exists on a create turn) | — (no case exists yet) |
 | `slack__search_messages`, `slack__get_messages` (read) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `slack__post_message` | — | ✓ (pinned to the case channel) | — | — | — | — |
@@ -346,10 +346,18 @@ Notes:
   and only when the workspace sets `[case] actions = true` (off by default):
   the thread-case agent on a **mention** turn, whose scope then sets
   `Scope.ThreadModeActions` (inherited by its sub-agents). Its planner gets the
-  reads (`core_ro`) and plans writes as tasks carrying `core`. Create and
-  materialize turns, Jobs and the workspace agent get none: their prompts are
-  built around the Case board status, and the kernel withholds the toolset
-  (`ToolSetDeps.OmitCore`) for any run whose scope does not grant it.
+  reads (`core_ro`) and plans writes as tasks carrying `core`. **Jobs** get
+  the reads only, in every thread-mode workspace: the Job host sets
+  `Scope.ThreadModeReads` and the kernel builds just `core_ro`
+  (`ToolSetDeps.CoreAccess`). That is the case_ref lookups
+  (`core__search_referenceable_cases` / `core__get_referenceable_cases`)
+  always, so a Job can resolve a case_ref field it sets through
+  `case__update_case`, plus `core__list_actions` / `core__get_action` when the
+  workspace sets `[case] actions = true` — in which case the Job system prompt
+  also lists the Case's Actions while stating they cannot be changed. Create and materialize turns
+  and the workspace agent get none: their prompts are built around the Case
+  board status, and the kernel withholds the toolset (`ToolSetDeps.OmitCore`)
+  for any run whose scope grants neither.
 - **Proposal sub-agents** are read-only investigators: no case exists yet, so the
   draft is materialised by the host. **Thread-case mention sub-agents and Job
   (`planexec`) sub-agents may use write tools** to carry out the requested change
@@ -380,7 +388,7 @@ hard lock.
 | **A Job posts only to the case's bound Slack channel.** | Jobs | **Code.** The only Slack write tool a Job gets is `slack__post_to_case_channel`, hard-pinned to `Case.SlackChannelID`. |
 | **Knowledge stays out of shared storage for private cases.** | Mention agent & Jobs on a private case | **Code.** `knowledge__create_knowledge` / `knowledge__update_knowledge` / `knowledge__create_tag` / `knowledge__update_tag` / `knowledge__delete_tag` are withheld; only read tools remain. |
 | **A Job cannot read its own past run traces.** | Jobs | **Prompt.** Determine idempotency from the current case state, the action list, and Slack history — not from prior traces. |
-| **In a thread-mode workspace only the mention agent touches Actions.** | Thread-mode create / materialize turns, Jobs, the workspace agent | **Code, at the tool wiring.** The kernel withholds the action (`core__*`) tools from every run on a thread-mode workspace whose scope does not set `ThreadModeActions`, and the workspace agent gets no cross-case action tools there. Only the thread-case mention turn sets it, and only on a workspace with `[case] actions = true` (off by default). The usecase itself accepts Actions on a thread-mode Case, so this is a tool-wiring guardrail only. |
+| **In a thread-mode workspace only the mention agent changes Actions.** | Thread-mode create / materialize turns, Jobs, the workspace agent | **Code, at the tool wiring.** The kernel withholds the action (`core__*`) tools from every run on a thread-mode workspace whose scope does not set `ThreadModeActions`, and the workspace agent gets no cross-case action tools there. Only the thread-case mention turn sets it, and only on a workspace with `[case] actions = true` (off by default). A thread-mode Job's scope sets `ThreadModeReads` instead, which grants the core read tools and no writer: the case_ref lookups always, and `core__list_actions` / `core__get_action` on a workspace with `[case] actions = true`. The usecase itself accepts Actions on a thread-mode Case, so this is a tool-wiring guardrail only. |
 | **Case lifecycle changes follow the mode-specific path.** | All agent contexts | **Code, at the usecase boundary.** Thread-mode cases close/reopen only via board status (`UpdateCaseStatus`); `CloseCase` / `ReopenCase` reject thread-mode (`ErrCaseThreadModeUseStatus`), and `UpdateCaseStatus` rejects channel-mode — keeping `BoardStatus` and the lifecycle `Status` in sync. |
 
 When a guardrail is "prompt only", treat it as a firm design constraint: do not

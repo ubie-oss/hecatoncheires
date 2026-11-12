@@ -35,6 +35,7 @@ func TestScopeRoundTrip(t *testing.T) {
 		Budget:      pricing.FromUSD(0.5),
 
 		ThreadModeActions: true,
+		ThreadModeReads:   true,
 	}
 
 	got := kernel.ScopeFrom(want.Metadata())

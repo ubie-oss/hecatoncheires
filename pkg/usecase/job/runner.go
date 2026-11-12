@@ -12,6 +12,8 @@ import (
 
 	"github.com/m-mizutani/hecatoncheires/pkg/agent/interaction"
 	"github.com/m-mizutani/hecatoncheires/pkg/agent/runtrace"
+	"github.com/m-mizutani/hecatoncheires/pkg/agent/tool/actionwriter"
+	"github.com/m-mizutani/hecatoncheires/pkg/agent/tool/core"
 	"github.com/m-mizutani/hecatoncheires/pkg/domain/interfaces"
 	"github.com/m-mizutani/hecatoncheires/pkg/domain/model"
 	"github.com/m-mizutani/hecatoncheires/pkg/domain/model/slack"
@@ -173,6 +175,27 @@ type ToolBuilderFunc func(ctx context.Context, c *model.Case, ws *model.Workspac
 
 func (f ToolBuilderFunc) Build(ctx context.Context, c *model.Case, ws *model.WorkspaceEntry) []gollem.Tool {
 	return f(ctx, c, ws)
+}
+
+// CoreTools returns the core (core__*) tools an in-process Job tool builder
+// hands a run on ws. It is the in-process counterpart of the kernel's
+// thread-mode gate (agentkernel.Scope.ThreadModeReads), so the CLI
+// fallback and the eval harness cannot drift from the durable runtime:
+//
+//   - channel mode (or no workspace): the reads plus the Job-safe writers, which
+//     withhold archive / unarchive / delete_action_step;
+//   - thread mode with [case] actions: the reads only — the Job may consult the
+//     case's Actions but leaves them to the people working the case;
+//   - any other thread-mode workspace: the case_ref lookups only.
+func CoreTools(ws *model.WorkspaceEntry, deps core.Deps) []gollem.Tool {
+	switch {
+	case !ws.IsThreadMode():
+		return append(core.NewReadOnly(deps), actionwriter.New(deps)...)
+	case ws.ActionsEnabled():
+		return core.NewReadOnly(deps)
+	default:
+		return core.NewCaseRef(deps)
+	}
 }
 
 // RunnerDeps groups the dependencies a JobRunner needs.
@@ -649,7 +672,8 @@ func (r *JobRunner) Run(ctx context.Context, j *model.Job, ev Event) error {
 			sessionThreadTS: sessionThreadTS,
 			// startedAt is the same instant PromptInputs.Now gave the planner's
 			// system prompt, so planner and sub-agents read one clock.
-			taskContext: caseTaskContext(key, c, startedAt),
+			taskContext:     caseTaskContext(key, c, startedAt),
+			threadModeReads: ws.IsThreadMode(),
 		})
 		if spawnErr != nil {
 			// A busy subject cannot reach here: the caller holds the (workspace, case,

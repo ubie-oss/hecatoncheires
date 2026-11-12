@@ -330,8 +330,24 @@ func buildToolSetDeps(d ToolDeps, sc Scope, entry *model.WorkspaceEntry, target 
 	// set yet, and keying on the case would hand that case action tools its
 	// workspace does not support. The pre-agentkit hosts keyed on the workspace
 	// for the same reason.
+	//
+	// The one narrower grant is Scope.ThreadModeReads, which every Job on a
+	// thread-mode workspace carries: it gets the READ half of core and never a
+	// writer. That is the case_ref lookups always — a case_ref field exists in
+	// either mode, and a Job that can set one through case__update_case needs
+	// them to find the id — plus the action reads when the workspace enables
+	// [case] actions, so it can take the case's Actions into account without
+	// changing them. [case] actions is re-checked here rather than recorded at
+	// spawn, so a run spawned before the option was turned off reads no Actions.
 	if entry != nil && entry.IsThreadMode() && !sc.ThreadModeActions {
-		deps.OmitCore = true
+		switch {
+		case !sc.ThreadModeReads:
+			deps.OmitCore = true
+		case entry.ActionsEnabled():
+			deps.CoreAccess = agent.CoreAccessReadOnly
+		default:
+			deps.CoreAccess = agent.CoreAccessCaseRefOnly
+		}
 	}
 
 	// The single-case writer tools are pinned to the case this Process runs on;

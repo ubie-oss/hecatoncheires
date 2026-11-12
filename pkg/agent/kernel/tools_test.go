@@ -358,6 +358,89 @@ func TestToolFactoryGrantsActionToolsToAThreadModeMentionTurn(t *testing.T) {
 	})
 }
 
+type stubCaseRefReader struct {
+	core.CaseRefReader
+}
+
+// TestToolFactoryGrantsCoreReadsToAThreadModeJob pins the Job's narrower grant:
+// a scope carrying ThreadModeReads on a thread-mode workspace gets the READ half
+// of core and no writer, whichever core toolset id it names. That is the
+// case_ref lookups always, plus the action reads when the workspace enables
+// [case] actions — re-checked at claim time, not recorded at spawn.
+func TestToolFactoryGrantsCoreReadsToAThreadModeJob(t *testing.T) {
+	ctx := context.Background()
+	repo := memory.New()
+	ctx = seedCase(t, ctx, repo, &model.Case{
+		Title:          "thread case",
+		SlackChannelID: "C-THREAD",
+		SlackThreadTS:  "1700000000.000100",
+	})
+
+	withActions := threadWorkspace()
+	withActions.CaseActions = true
+
+	sc := kernel.Scope{
+		WorkspaceID: "ws-1", CaseID: 1,
+		ToolSets:        []string{kernel.ToolSetsAll},
+		ThreadModeReads: true,
+	}
+	factoryFor := func(t *testing.T, ws *model.WorkspaceEntry) agentkit.ToolFactory {
+		t.Helper()
+		factory, err := kernel.NewToolFactory(kernel.ToolDeps{
+			Repo:      repo,
+			Registry:  testRegistry(ws),
+			ActionUC:  stubActionMutator{},
+			CaseRefUC: stubCaseRefReader{},
+		})
+		gt.NoError(t, err).Required()
+		return factory
+	}
+	coreNames := func(tools []gollem.Tool) []string {
+		var out []string
+		for _, n := range toolNames(tools) {
+			if strings.HasPrefix(n, "core__") {
+				out = append(out, n)
+			}
+		}
+		return out
+	}
+	allReads := []string{
+		"core__get_action", "core__get_referenceable_cases",
+		"core__list_actions", "core__search_referenceable_cases",
+	}
+	caseRefOnly := []string{"core__get_referenceable_cases", "core__search_referenceable_cases"}
+
+	t.Run("[case] actions: a simple Job gets the reads once and no writer", func(t *testing.T) {
+		tools, err := factoryFor(t, withActions)(ctx, newProcess(kernel.AgentJobSimple, sc))
+		gt.NoError(t, err).Required()
+		// Each read tool is offered once, though the palette names both
+		// core_job and core_ro.
+		gt.Array(t, coreNames(tools)).Equal(allReads)
+	})
+
+	t.Run("[case] actions: a sub-agent given core_job still gets no writer", func(t *testing.T) {
+		task := sc
+		task.ToolSets = []string{agent.ToolSetCoreJob, agent.ToolSetCore, agent.ToolSetCoreRO}
+		tools, err := factoryFor(t, withActions)(ctx, newProcess(kernel.AgentTask, task))
+		gt.NoError(t, err).Required()
+		gt.Array(t, toolNames(tools)).Equal(allReads)
+	})
+
+	t.Run("without [case] actions: the case_ref lookups only", func(t *testing.T) {
+		tools, err := factoryFor(t, threadWorkspace())(ctx, newProcess(kernel.AgentJobSimple, sc))
+		gt.NoError(t, err).Required()
+		gt.Array(t, coreNames(tools)).Equal(caseRefOnly)
+	})
+
+	t.Run("a Job without the grant gets none", func(t *testing.T) {
+		denied := sc
+		denied.ThreadModeReads = false
+		tools, err := factoryFor(t, withActions)(ctx, newProcess(kernel.AgentJobSimple, denied))
+		gt.NoError(t, err).Required()
+		gt.Bool(t, hasPrefixIn(toolNames(tools), "core__")).False()
+	})
+}
+
 // TestToolFactoryBuildsTheJobPalette pins the unattended-run palette against
 // what the pre-agentkit buildJobTools assembled. The three withheld action tools
 // are the point: a Job acts on its own judgement with nobody reviewing it, and a

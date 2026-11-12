@@ -398,6 +398,80 @@ func TestToolSetResolver_OmitCoreWithholdsBothCoreSets(t *testing.T) {
 	gt.Array(t, r.Resolve([]string{agent.ToolSetCoreRO})).Length(0)
 }
 
+// stubCaseRefReader satisfies core.CaseRefReader so the case_ref tools are
+// built; the resolver tests never call them.
+type stubCaseRefReader struct{ core.CaseRefReader }
+
+// TestToolSetResolver_CoreAccess pins the narrower grants a thread-mode Job
+// gets: with [case] actions, core_ro resolves to the action reads plus the
+// case_ref lookups; without, to the case_ref lookups alone. Neither writer set
+// resolves in either, so the probe filters core / core_job out of the palette.
+func TestToolSetResolver_CoreAccess(t *testing.T) {
+	deps := core.Deps{WorkspaceID: "ws", CaseID: 1, CaseRefUC: stubCaseRefReader{}}
+
+	cases := []struct {
+		name   string
+		access agent.CoreAccess
+		want   []string
+	}{
+		{
+			name:   "read-only",
+			access: agent.CoreAccessReadOnly,
+			want: []string{
+				"core__get_action", "core__get_referenceable_cases",
+				"core__list_actions", "core__search_referenceable_cases",
+			},
+		},
+		{
+			name:   "case_ref only",
+			access: agent.CoreAccessCaseRefOnly,
+			want:   []string{"core__get_referenceable_cases", "core__search_referenceable_cases"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := agent.NewToolSetResolver(agent.ToolSetDeps{CoreAccess: tc.access, Core: deps})
+			gt.Array(t, toolNames(r.Resolve([]string{agent.ToolSetCoreRO}))).Equal(tc.want)
+			gt.Array(t, r.Resolve([]string{agent.ToolSetCore})).Length(0)
+			gt.Array(t, r.Resolve([]string{agent.ToolSetCoreJob})).Length(0)
+			gt.Bool(t, r.Has(agent.ToolSetCoreRO)).True()
+			gt.Bool(t, r.Has(agent.ToolSetCore)).False()
+			gt.Bool(t, r.Has(agent.ToolSetCoreJob)).False()
+		})
+	}
+
+	t.Run("case_ref only without a reader resolves to nothing", func(t *testing.T) {
+		r := agent.NewToolSetResolver(agent.ToolSetDeps{
+			CoreAccess: agent.CoreAccessCaseRefOnly,
+			Core:       core.Deps{WorkspaceID: "ws", CaseID: 1},
+		})
+		gt.Bool(t, r.Has(agent.ToolSetCoreRO)).False()
+	})
+
+	t.Run("OmitCore takes precedence", func(t *testing.T) {
+		both := agent.NewToolSetResolver(agent.ToolSetDeps{
+			OmitCore:   true,
+			CoreAccess: agent.CoreAccessReadOnly,
+			Core:       deps,
+		})
+		gt.Array(t, both.Resolve([]string{agent.ToolSetCoreRO})).Length(0)
+	})
+}
+
+// TestToolSetResolver_CoreReadsAreNotOfferedTwice pins that a request naming
+// core_ro beside a set that already carries the reads (core, core_job) offers
+// each read tool once. The Job palette names core_job and core_ro together.
+func TestToolSetResolver_CoreReadsAreNotOfferedTwice(t *testing.T) {
+	r := agent.NewToolSetResolver(agent.ToolSetDeps{
+		Core: core.Deps{WorkspaceID: "ws", CaseID: 1},
+	})
+	for _, writer := range []string{agent.ToolSetCore, agent.ToolSetCoreJob} {
+		alone := toolNames(r.Resolve([]string{writer}))
+		withReads := toolNames(r.Resolve([]string{writer, agent.ToolSetCoreRO}))
+		gt.Array(t, withReads).Equal(alone)
+	}
+}
+
 // TestToolSetResolver_Memo pins that memo tools appear only when both the
 // mutator and the workspace's memo schema are wired, since the schema drives
 // field coercion in create/update.

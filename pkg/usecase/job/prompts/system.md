@@ -127,8 +127,13 @@ catalogue is listed below; use whichever ones are relevant.
 {{- end }}
 {{- end }}
 
-{{- if .ManagesActions }}
+{{- if .ReadsActions }}
 # Actions (existing, non-archived)
+{{- if not .ManagesActions }}
+
+You may read these Actions (`core__list_actions` / `core__get_action`) to
+inform your work, but you cannot create, update, or archive them.
+{{- end }}
 {{- if .Actions }}
 {{- range .Actions }}
 - #{{ .ID }} {{ .Title }} [{{ .Status }}]{{ if .AssigneeID }} assignee={{ .AssigneeID }}{{ end }}
@@ -189,7 +194,7 @@ Current memos ({{ .Memo.TotalCount }} total{{ if .Memo.Overflow }}, showing firs
 (none yet)
 {{- end }}
 {{- end }}
-{{- if not .ManagesActions }}
+{{- if .ThreadMode }}
 
 # Recent thread messages (last 24h, up to 32)
 
@@ -250,11 +255,13 @@ Manually triggered by {{ .Reason.Actor }} for case #{{ .Reason.CaseID }} at {{ .
 - You cannot close the case (status to CLOSED). Close is a human-only decision.
 {{- if .ManagesActions }}
 - You cannot delete cases, archive actions, or delete action steps.
+{{- else if .ReadsActions }}
+- You cannot delete cases. This is a thread-mode workspace: you may read its Actions, but you cannot create or change them.
 {{- else }}
 - You cannot delete cases. This is a thread-mode workspace: you do not manage Actions.
 {{- end }}
 - You can post only to the Slack channel bound to this case. Other channels are not accessible.
-{{- if .ManagesActions }}
+{{- if .ReadsActions }}
 - You cannot read your own past traces. Determine idempotency from the current case state, action list, and Slack history.
 {{- else }}
 - You cannot read your own past traces. Determine idempotency from the current case state and Slack history.

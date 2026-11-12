@@ -112,11 +112,20 @@ type systemPromptData struct {
 	// action-specific guardrails so the prompt never references a concept the
 	// agent has no tools for.
 	ManagesActions bool
-	Actions        []systemPromptAction
-	Memo           systemPromptMemoSection
+	// ReadsActions is true wherever the Job can read the case's Actions: every
+	// channel-mode workspace (ManagesActions), and a thread-mode workspace that
+	// enables [case] actions, where the run is given the read tools only. The
+	// template gates the Actions list on it, and on ManagesActions whatever
+	// says the agent may change them.
+	ReadsActions bool
+	// ThreadMode is true for a thread-mode workspace. It gates the recent
+	// thread messages section, which only a thread-bound case has.
+	ThreadMode bool
+	Actions    []systemPromptAction
+	Memo       systemPromptMemoSection
 	// RecentMessages is the thread's recent Slack messages, oldest first.
-	// Only populated for thread-mode workspaces (ManagesActions == false);
-	// the template gates the whole section on ManagesActions and shows
+	// Only populated for thread-mode workspaces (ThreadMode);
+	// the template gates the whole section on ThreadMode and shows
 	// "(none)" when the slice is empty.
 	RecentMessages []systemPromptMessage
 	Trigger        systemPromptTrigger
@@ -341,10 +350,14 @@ func buildSystemPromptData(in PromptInputs) systemPromptData {
 		data.Language = i18n.LanguageLabelOf(in.Workspace.Language)
 	}
 
-	// Thread-mode workspaces manage no Actions; the Job agent gets no action
-	// tools there, so the prompt must not advertise an Actions section or
-	// action guardrails. nil workspace defaults to channel-mode (actions on).
-	data.ManagesActions = in.Workspace == nil || !in.Workspace.IsThreadMode()
+	// A Job writes Actions only in a channel-mode workspace. A thread-mode
+	// workspace gives it no action tools unless it enables [case] actions, and
+	// then only the read tools (agentkernel.Scope.ThreadModeReads), so the
+	// prompt lists the Actions without advertising any action write. A nil
+	// workspace defaults to channel-mode (actions on).
+	data.ThreadMode = in.Workspace.IsThreadMode()
+	data.ManagesActions = !data.ThreadMode
+	data.ReadsActions = in.Workspace.ActionsEnabled()
 
 	// Now is the turn's start time (runner.go injects r.clock()); a zero
 	// value means the caller did not supply it, so the section is skipped
@@ -468,9 +481,9 @@ func buildSystemPromptData(in PromptInputs) systemPromptData {
 	// Recent thread messages: thread-mode only. The caller has already
 	// bounded the slice to the last recentMessageWindow and recentMessageMaxCount
 	// and ordered it oldest-first; here we only format and rune-truncate each
-	// body. Channel-mode workspaces (ManagesActions) never reach this block, so
-	// the section is absent from their prompt entirely.
-	if !data.ManagesActions {
+	// body. Channel-mode workspaces never reach this block, so the section is
+	// absent from their prompt entirely.
+	if data.ThreadMode {
 		for _, m := range in.RecentMessages {
 			if m == nil {
 				continue
@@ -524,10 +537,11 @@ func buildSystemPromptData(in PromptInputs) systemPromptData {
 		data.Case = cs
 	}
 
-	// Skip the Actions section entirely for workspaces that manage no Actions
-	// (thread-mode); the template gates on ManagesActions too, but leaving the
-	// slice empty keeps the rendered prompt honest if that guard ever changes.
-	if data.ManagesActions {
+	// Skip the Actions section entirely for workspaces whose Jobs cannot read
+	// Actions (thread-mode without [case] actions); the template gates on
+	// ReadsActions too, but leaving the slice empty keeps the rendered prompt
+	// honest if that guard ever changes.
+	if data.ReadsActions {
 		for _, a := range in.Actions {
 			if a == nil || a.IsArchived() {
 				continue
