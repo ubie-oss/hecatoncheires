@@ -1230,7 +1230,7 @@ indicates the issue is resolved.
 
 | Key | Type | Required | Default | Description |
 |-----|------|----------|---------|-------------|
-| `actions` | bool | No | `false` | Thread mode only. Gives this workspace's Cases Actions: the case detail page shows the Related Actions section, Actions can be created on (and moved into) its Cases, and the agent that answers a mention in a Case thread gets the `core__*` action tools. Off by default, so a thread-mode workspace configured before the option existed keeps having no Actions. Channel-mode Cases always have Actions; setting it there is ignored with a startup warning. |
+| `actions` | bool | No | `false` | Thread mode only. Gives this workspace's Cases Actions: the case detail page shows the Related Actions section, Actions can be created on (and moved into) its Cases, the agent that answers a mention in a Case thread gets the `core__*` action tools, and the workspace's Jobs (scheduled and case-event alike) can read the Case's Actions (`core__list_actions` / `core__get_action`) and see them listed in their system prompt — but cannot create or change them. Off by default, so a thread-mode workspace configured before the option existed keeps having no Actions. Channel-mode Cases always have Actions; setting it there is ignored with a startup warning. |
 
 ```toml
 [case]

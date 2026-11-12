@@ -398,6 +398,47 @@ func TestToolSetResolver_OmitCoreWithholdsBothCoreSets(t *testing.T) {
 	gt.Array(t, r.Resolve([]string{agent.ToolSetCoreRO})).Length(0)
 }
 
+// TestToolSetResolver_CoreReadOnlyBuildsOnlyTheReads pins the narrower grant a
+// thread-mode Job gets when its workspace enables [case] actions: core_ro
+// resolves to the read tools, and neither writer set resolves to anything, so
+// the probe filters core / core_job out of the palette.
+func TestToolSetResolver_CoreReadOnlyBuildsOnlyTheReads(t *testing.T) {
+	r := agent.NewToolSetResolver(agent.ToolSetDeps{
+		CoreReadOnly: true,
+		Core:         core.Deps{WorkspaceID: "ws", CaseID: 1},
+	})
+	gt.Array(t, toolNames(r.Resolve([]string{agent.ToolSetCoreRO}))).
+		Equal([]string{"core__get_action", "core__list_actions"})
+	gt.Array(t, r.Resolve([]string{agent.ToolSetCore})).Length(0)
+	gt.Array(t, r.Resolve([]string{agent.ToolSetCoreJob})).Length(0)
+	gt.Bool(t, r.Has(agent.ToolSetCoreRO)).True()
+	gt.Bool(t, r.Has(agent.ToolSetCore)).False()
+	gt.Bool(t, r.Has(agent.ToolSetCoreJob)).False()
+
+	t.Run("OmitCore takes precedence", func(t *testing.T) {
+		both := agent.NewToolSetResolver(agent.ToolSetDeps{
+			OmitCore:     true,
+			CoreReadOnly: true,
+			Core:         core.Deps{WorkspaceID: "ws", CaseID: 1},
+		})
+		gt.Array(t, both.Resolve([]string{agent.ToolSetCoreRO})).Length(0)
+	})
+}
+
+// TestToolSetResolver_CoreReadsAreNotOfferedTwice pins that a request naming
+// core_ro beside a set that already carries the reads (core, core_job) offers
+// each read tool once. The Job palette names core_job and core_ro together.
+func TestToolSetResolver_CoreReadsAreNotOfferedTwice(t *testing.T) {
+	r := agent.NewToolSetResolver(agent.ToolSetDeps{
+		Core: core.Deps{WorkspaceID: "ws", CaseID: 1},
+	})
+	for _, writer := range []string{agent.ToolSetCore, agent.ToolSetCoreJob} {
+		alone := toolNames(r.Resolve([]string{writer}))
+		withReads := toolNames(r.Resolve([]string{writer, agent.ToolSetCoreRO}))
+		gt.Array(t, withReads).Equal(alone)
+	}
+}
+
 // TestToolSetResolver_Memo pins that memo tools appear only when both the
 // mutator and the workspace's memo schema are wired, since the schema drives
 // field coercion in create/update.

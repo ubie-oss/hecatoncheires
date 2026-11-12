@@ -120,9 +120,11 @@ Each Workspace chooses how Cases bind to Slack, via `[slack] mode`:
   detail page or by mentioning the bot in the Case thread, and their Slack
   notifications are quiet one-line replies in the Case thread (see
   [Slack → Actions in thread mode](slack.md#actions-in-thread-mode)). **Apart
-  from that mention agent, agent execution there is given no Action tools** —
-  Jobs and the workspace agent cannot read or mutate Actions, and the Job system
-  prompt omits the Actions section. To compensate, a thread-mode Job's system prompt instead
+  from that mention agent, agent execution there cannot change Actions** —
+  the workspace agent has no Action tools, and Jobs can only read them (and see
+  them listed in their system prompt) when `[case] actions = true`; without the
+  option Jobs cannot read them either and the Job system prompt omits the
+  Actions section. In either case, a thread-mode Job's system prompt also
   embeds the thread's recent Slack messages — up to the newest 32 from the last
   24 hours, oldest first — so the Job agent can reason about the latest
   conversation; long messages are truncated (~140 characters, with the original

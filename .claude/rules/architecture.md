@@ -454,7 +454,8 @@ Slack tool it did have (the poster).
 - **Non-Action tools default to both channel-mode and thread-mode.** Only
   Action / `core` tools are mode-gated (withheld in thread-mode workspaces
   except from the thread-case mention turn of a workspace with
-  `[case] actions = true`, whose scope sets `Scope.ThreadModeActions`).
+  `[case] actions = true`, whose scope sets `Scope.ThreadModeActions`; that
+  workspace's Jobs get the read half only, via `Scope.ThreadModeActionReads`).
   Read-only and auxiliary tools (Slack read, Notion, web fetch, knowledge,
   memo) are wired in both modes unless a specific, recorded reason excludes
   them.

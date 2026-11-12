@@ -122,6 +122,29 @@ func TestBuildJobTools_ThreadModeOmitsActionTools(t *testing.T) {
 	gt.Bool(t, hasCaseTool(tools)).True()
 }
 
+// A thread-mode workspace that enables [case] actions gives its Jobs the action
+// READS only: the Job may consult the case's Actions but never writes them.
+func TestBuildJobTools_ThreadModeWithActionsHasReadOnlyActionTools(t *testing.T) {
+	ws := &model.WorkspaceEntry{
+		Workspace:   model.Workspace{ID: "ws"},
+		CaseMode:    model.CaseModeThread,
+		CaseActions: true,
+	}
+	c := &model.Case{ID: 1, SlackChannelID: "C-MONITOR", SlackThreadTS: "1700000000.000100"}
+
+	names := toolNames(cli.BuildJobToolsForTest(c, ws))
+
+	gt.Bool(t, names["core__list_actions"]).True()
+	gt.Bool(t, names["core__get_action"]).True()
+	for _, writer := range []string{
+		"core__create_action", "core__update_action", "core__update_action_status",
+		"core__set_action_assignee", "core__archive_action", "core__add_action_step",
+	} {
+		gt.Bool(t, names[writer]).False()
+	}
+	gt.Bool(t, hasCaseTool(cli.BuildJobToolsForTest(c, ws))).True()
+}
+
 func hasCaseTool(tools []gollem.Tool) bool {
 	for _, t := range tools {
 		if strings.HasPrefix(t.Spec().Name, "case__") {

@@ -324,6 +324,12 @@ type spawnParams struct {
 	// conversation needs the case thread.
 	taskContext agent.TaskContext
 
+	// actionReads grants the run the read half of the action toolset on a
+	// thread-mode workspace (agentkernel.Scope.ThreadModeActionReads). The
+	// caller sets it when the workspace enables [case] actions; a channel-mode
+	// workspace needs no grant, since its Jobs get the Job-safe action set.
+	actionReads bool
+
 	job          *model.Job
 	event        Event
 	key          model.JobRunKey
@@ -372,6 +378,10 @@ func (d *DurableRuntime) spawn(ctx context.Context, strategy model.JobStrategy, 
 		// Empty unless the workspace configures a language (Run sets it): an
 		// unconfigured Job keeps the deployment default, as it always has.
 		Lang: string(i18n.LangFromContext(ctx)),
+		// A thread-mode workspace enabling [case] actions lets its Jobs read the
+		// case's Actions, never write them: those Actions are left to the people
+		// working the case and to the mention agent they ask.
+		ThreadModeActionReads: p.actionReads,
 	}
 	// Both or neither: the scope rejects a half-set pair, and a marker that could
 	// not be posted leaves the run with no thread to report into rather than

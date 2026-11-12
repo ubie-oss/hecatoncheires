@@ -215,10 +215,17 @@ so every entry point (GraphQL, Slack, agent tools, eval) is covered uniformly:
   workspace gets the action (`core__*`) tools: its scope sets
   `Scope.ThreadModeActions`, which its sub-agents inherit, and the kernel
   withholds the core toolset (`OmitCore`) from every other run there — create
-  and materialize turns, Jobs (runtime and eval env) and the workspace agent,
-  whose prompts are built around the Case board status.
+  and materialize turns and the workspace agent, whose prompts are built
+  around the Case board status. Jobs of such a workspace are the one narrower
+  grant: the Job host sets `Scope.ThreadModeActionReads`, and the kernel builds
+  only the read half of the core toolset (`CoreReadOnly`), so `core_ro`
+  resolves and `core` / `core_job` resolve to nothing. The kernel re-checks
+  `ActionsEnabled()` at claim time, so a run spawned before the option was
+  turned off gets no action tools. The in-process Job tool builders (CLI
+  fallback and eval env) share the same decision through `job.ActionTools`,
+  and the Job system prompt lists the Actions as read-only.
 - **Thread-mode Jobs embed the thread's recent messages in the system prompt.**
-  Because a thread-mode Job has no Actions to anchor on, `JobRunner` loads the
+  Because a thread-mode Job usually has no Actions to anchor on (it can only read them, and only with `[case] actions = true`), `JobRunner` loads the
   Case's recent Slack messages (`CaseMessageRepository.List`, bounded to the
   newest `recentMessageMaxCount` = 32 within `recentMessageWindow` = 24h of the
   run start, ordered oldest-first) and renders them in a dedicated system-prompt

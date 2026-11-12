@@ -151,6 +151,64 @@ func TestDurableRuntime_SpawnCarriesTheJobsModelAndBudget(t *testing.T) {
 	gt.Value(t, plain.Budget).Equal(pricing.NanoUSD(0))
 }
 
+// A Job on a thread-mode workspace that enables [case] actions is granted the
+// action reads (and only the reads) through its scope. A thread-mode workspace
+// without the option, and a channel-mode one — whose Jobs already get the
+// Job-safe action set — carry no such grant.
+func TestDurableRuntime_SpawnGrantsActionReadsToAThreadModeWorkspaceWithActions(t *testing.T) {
+	cases := []struct {
+		name      string
+		mode      model.CaseMode
+		actions   bool
+		wantReads bool
+	}{
+		{name: "thread mode with [case] actions", mode: model.CaseModeThread, actions: true, wantReads: true},
+		{name: "thread mode without [case] actions", mode: model.CaseModeThread, actions: false, wantReads: false},
+		{name: "channel mode", mode: model.CaseModeChannel, actions: false, wantReads: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			repo, c := setupCaseWithSlack(t, "ws", "C-CASE", "1700000000.000100")
+			j := &model.Job{
+				ID:     "reader",
+				Prompt: "summarise the case",
+				Events: model.JobEvents{Scheduled: &model.ScheduledEventConfig{Every: time.Hour}},
+			}
+			registry := model.NewWorkspaceRegistry()
+			registry.Register(&model.WorkspaceEntry{
+				Workspace:   model.Workspace{ID: "ws"},
+				CaseMode:    tc.mode,
+				CaseActions: tc.actions,
+				Jobs:        []*model.Job{j},
+			})
+
+			llm := singleReplyLLM("the case looks fine", 120, 34)
+			durable := &job.DurableRuntime{History: agentarchive.NewMemoryHistoryStore()}
+			runner := job.NewJobRunner(job.RunnerDeps{
+				Repo: repo, Registry: registry, LLMClient: llm, Durable: durable,
+			})
+			k := bindDurableJobRuntime(t, runner, durable, repo, registry, llm)
+
+			gt.NoError(t, runner.Run(ctx, j, job.Event{
+				Domain: model.JobEventDomainScheduled, WorkspaceID: "ws", CaseID: c.ID,
+				Timestamp: time.Now().UTC(),
+			})).Required()
+
+			busy, err := durable.Locator.Busy(ctx, agentkernel.JobRunSubject("ws", c.ID, j.ID))
+			gt.NoError(t, err).Required()
+			gt.Value(t, busy).NotNil().Required()
+			proc, err := k.GetProcess(ctx, busy.ProcessID)
+			gt.NoError(t, err).Required()
+
+			sc := agentkernel.ScopeFrom(proc.Metadata)
+			gt.Value(t, sc.ThreadModeActionReads).Equal(tc.wantReads)
+			// The Job is never given the mention turn's full action grant.
+			gt.Bool(t, sc.ThreadModeActions).False()
+		})
+	}
+}
+
 // A durable Job run carries the workspace language on its own metadata and in the
 // planner's language directive, and its completion marker follows it. A
 // workspace that configures no language leaves both empty, so the run keeps the

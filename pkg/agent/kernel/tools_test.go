@@ -358,6 +358,104 @@ func TestToolFactoryGrantsActionToolsToAThreadModeMentionTurn(t *testing.T) {
 	})
 }
 
+// TestToolFactoryGrantsActionReadsToAThreadModeJob pins the Job's narrower
+// grant: a scope carrying ThreadModeActionReads on a thread-mode workspace that
+// enables [case] actions gets the action READS and no writer, whichever action
+// toolset id it names. The same scope on a workspace that does not enable
+// [case] actions gets nothing — the workspace is re-checked at claim time.
+func TestToolFactoryGrantsActionReadsToAThreadModeJob(t *testing.T) {
+	ctx := context.Background()
+	repo := memory.New()
+	ctx = seedCase(t, ctx, repo, &model.Case{
+		Title:          "thread case",
+		SlackChannelID: "C-THREAD",
+		SlackThreadTS:  "1700000000.000100",
+	})
+
+	withActions := threadWorkspace()
+	withActions.CaseActions = true
+
+	sc := kernel.Scope{
+		WorkspaceID: "ws-1", CaseID: 1,
+		ToolSets:              []string{kernel.ToolSetsAll},
+		ThreadModeActionReads: true,
+	}
+
+	t.Run("a simple Job gets the reads and no writer", func(t *testing.T) {
+		factory, err := kernel.NewToolFactory(kernel.ToolDeps{
+			Repo:     repo,
+			Registry: testRegistry(withActions),
+			ActionUC: stubActionMutator{},
+		})
+		gt.NoError(t, err).Required()
+
+		tools, err := factory(ctx, newProcess(kernel.AgentJobSimple, sc))
+		gt.NoError(t, err).Required()
+		names := toolNames(tools)
+		gt.Bool(t, slices.Contains(names, "core__list_actions")).True()
+		gt.Bool(t, slices.Contains(names, "core__get_action")).True()
+		for _, writer := range []string{"core__create_action", "core__update_action", "core__update_action_status", "core__set_action_assignee"} {
+			gt.Bool(t, slices.Contains(names, writer)).False()
+		}
+		// Each read tool is offered once, though the palette names both
+		// core_job and core_ro.
+		gt.Number(t, countOf(names, "core__list_actions")).Equal(1)
+	})
+
+	t.Run("a sub-agent given core_job still gets no writer", func(t *testing.T) {
+		factory, err := kernel.NewToolFactory(kernel.ToolDeps{
+			Repo:     repo,
+			Registry: testRegistry(withActions),
+			ActionUC: stubActionMutator{},
+		})
+		gt.NoError(t, err).Required()
+
+		task := sc
+		task.ToolSets = []string{agent.ToolSetCoreJob, agent.ToolSetCore, agent.ToolSetCoreRO}
+		tools, err := factory(ctx, newProcess(kernel.AgentTask, task))
+		gt.NoError(t, err).Required()
+		gt.Array(t, toolNames(tools)).Equal([]string{"core__get_action", "core__list_actions"})
+	})
+
+	t.Run("a workspace without [case] actions gets none", func(t *testing.T) {
+		factory, err := kernel.NewToolFactory(kernel.ToolDeps{
+			Repo:     repo,
+			Registry: testRegistry(threadWorkspace()),
+			ActionUC: stubActionMutator{},
+		})
+		gt.NoError(t, err).Required()
+
+		tools, err := factory(ctx, newProcess(kernel.AgentJobSimple, sc))
+		gt.NoError(t, err).Required()
+		gt.Bool(t, hasPrefixIn(toolNames(tools), "core__")).False()
+	})
+
+	t.Run("a Job without the grant gets none", func(t *testing.T) {
+		factory, err := kernel.NewToolFactory(kernel.ToolDeps{
+			Repo:     repo,
+			Registry: testRegistry(withActions),
+			ActionUC: stubActionMutator{},
+		})
+		gt.NoError(t, err).Required()
+
+		denied := sc
+		denied.ThreadModeActionReads = false
+		tools, err := factory(ctx, newProcess(kernel.AgentJobSimple, denied))
+		gt.NoError(t, err).Required()
+		gt.Bool(t, hasPrefixIn(toolNames(tools), "core__")).False()
+	})
+}
+
+func countOf(names []string, want string) int {
+	n := 0
+	for _, name := range names {
+		if name == want {
+			n++
+		}
+	}
+	return n
+}
+
 // TestToolFactoryBuildsTheJobPalette pins the unattended-run palette against
 // what the pre-agentkit buildJobTools assembled. The three withheld action tools
 // are the point: a Job acts on its own judgement with nobody reviewing it, and a

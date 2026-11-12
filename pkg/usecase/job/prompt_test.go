@@ -117,6 +117,45 @@ func TestBuildSystemPrompt_ThreadModeOmitsActions(t *testing.T) {
 	mustContain(t, got, "cannot close the case")
 }
 
+// A thread-mode workspace that enables [case] actions gives its Jobs the action
+// read tools only. The prompt lists the case's Actions and says they may be read
+// but not changed, keeps the thread-mode sections, and carries none of the
+// channel-mode guidance that presumes action writes.
+func TestBuildSystemPrompt_ThreadModeWithActionsListsActionsReadOnly(t *testing.T) {
+	ws := newWorkspace("ws", "WS")
+	ws.CaseMode = model.CaseModeThread
+	ws.CaseActions = true
+
+	archivedAt := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	actions := []*model.Action{
+		{ID: 7, Title: "Sample action", Status: types.ActionStatusTodo, AssigneeID: "U-ALICE"},
+		{ID: 8, Title: "Archived action", Status: types.ActionStatusTodo, ArchivedAt: &archivedAt},
+	}
+
+	got, err := job.BuildSystemPrompt(job.PromptInputs{
+		Job:            threadModeJob(),
+		Workspace:      ws,
+		Case:           newCase(42),
+		Actions:        actions,
+		RecentMessages: nil,
+		Event:          threadModeEvent(),
+	})
+	gt.NoError(t, err).Required()
+
+	mustContain(t, got, "# Actions (existing, non-archived)")
+	mustContain(t, got, "You may read these Actions (`core__list_actions` / `core__get_action`) to\ninform your work, but you cannot create, update, or archive them.")
+	mustContain(t, got, "- #7 Sample action [TODO] assignee=U-ALICE")
+	mustNotContain(t, got, "Archived action")
+	mustContain(t, got, "- You cannot delete cases. This is a thread-mode workspace: you may read its Actions, but you cannot create or change them.")
+	mustContain(t, got, "Determine idempotency from the current case state, action list, and Slack history.")
+	mustNotContain(t, got, "you do not manage Actions")
+	// The write-side guidance stays channel-mode only.
+	mustNotContain(t, got, "if an equivalent action or Slack message already exists")
+	mustNotContain(t, got, "archive actions, or delete action steps")
+	// Thread-mode sections still render.
+	mustContain(t, got, "# Recent thread messages (last 24h, up to 32)")
+}
+
 // A Job reaches Slack only through slack__post_to_case_channel, and it composes
 // that text itself, so the shared Slack formatting rules belong in its system
 // prompt regardless of whether the workspace manages Actions.
