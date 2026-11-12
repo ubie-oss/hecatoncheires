@@ -158,6 +158,16 @@ func NewReadOnly(deps Deps) []gollem.Tool {
 	return append(tools, caseRefTools(deps)...)
 }
 
+// NewCaseRef builds only the read-only case_ref lookup tools
+// (core__search_referenceable_cases / core__get_referenceable_cases), without
+// any action tool. It is what a run gets where a workspace has no Actions to
+// show it but its case_ref fields still need resolving — a thread-mode Job on a
+// workspace that does not enable [case] actions. Returns nil when no
+// CaseRefReader is wired.
+func NewCaseRef(deps Deps) []gollem.Tool {
+	return caseRefTools(deps)
+}
+
 // caseRefTools builds the read-only case_ref tools when a
 // CaseRefReader is wired. Returns nil otherwise so callers (mention,
 // investigation sub-agents, Jobs) that have no case_ref fields get no

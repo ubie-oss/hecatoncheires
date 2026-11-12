@@ -358,12 +358,16 @@ func TestToolFactoryGrantsActionToolsToAThreadModeMentionTurn(t *testing.T) {
 	})
 }
 
-// TestToolFactoryGrantsActionReadsToAThreadModeJob pins the Job's narrower
-// grant: a scope carrying ThreadModeActionReads on a thread-mode workspace that
-// enables [case] actions gets the action READS and no writer, whichever action
-// toolset id it names. The same scope on a workspace that does not enable
-// [case] actions gets nothing — the workspace is re-checked at claim time.
-func TestToolFactoryGrantsActionReadsToAThreadModeJob(t *testing.T) {
+type stubCaseRefReader struct {
+	core.CaseRefReader
+}
+
+// TestToolFactoryGrantsCoreReadsToAThreadModeJob pins the Job's narrower grant:
+// a scope carrying ThreadModeReads on a thread-mode workspace gets the READ half
+// of core and no writer, whichever core toolset id it names. That is the
+// case_ref lookups always, plus the action reads when the workspace enables
+// [case] actions — re-checked at claim time, not recorded at spawn.
+func TestToolFactoryGrantsCoreReadsToAThreadModeJob(t *testing.T) {
 	ctx := context.Background()
 	repo := memory.New()
 	ctx = seedCase(t, ctx, repo, &model.Case{
@@ -377,83 +381,64 @@ func TestToolFactoryGrantsActionReadsToAThreadModeJob(t *testing.T) {
 
 	sc := kernel.Scope{
 		WorkspaceID: "ws-1", CaseID: 1,
-		ToolSets:              []string{kernel.ToolSetsAll},
-		ThreadModeActionReads: true,
+		ToolSets:        []string{kernel.ToolSetsAll},
+		ThreadModeReads: true,
 	}
-
-	t.Run("a simple Job gets the reads and no writer", func(t *testing.T) {
+	factoryFor := func(t *testing.T, ws *model.WorkspaceEntry) agentkit.ToolFactory {
+		t.Helper()
 		factory, err := kernel.NewToolFactory(kernel.ToolDeps{
-			Repo:     repo,
-			Registry: testRegistry(withActions),
-			ActionUC: stubActionMutator{},
+			Repo:      repo,
+			Registry:  testRegistry(ws),
+			ActionUC:  stubActionMutator{},
+			CaseRefUC: stubCaseRefReader{},
 		})
 		gt.NoError(t, err).Required()
-
-		tools, err := factory(ctx, newProcess(kernel.AgentJobSimple, sc))
-		gt.NoError(t, err).Required()
-		names := toolNames(tools)
-		gt.Bool(t, slices.Contains(names, "core__list_actions")).True()
-		gt.Bool(t, slices.Contains(names, "core__get_action")).True()
-		for _, writer := range []string{"core__create_action", "core__update_action", "core__update_action_status", "core__set_action_assignee"} {
-			gt.Bool(t, slices.Contains(names, writer)).False()
+		return factory
+	}
+	coreNames := func(tools []gollem.Tool) []string {
+		var out []string
+		for _, n := range toolNames(tools) {
+			if strings.HasPrefix(n, "core__") {
+				out = append(out, n)
+			}
 		}
+		return out
+	}
+	allReads := []string{
+		"core__get_action", "core__get_referenceable_cases",
+		"core__list_actions", "core__search_referenceable_cases",
+	}
+	caseRefOnly := []string{"core__get_referenceable_cases", "core__search_referenceable_cases"}
+
+	t.Run("[case] actions: a simple Job gets the reads once and no writer", func(t *testing.T) {
+		tools, err := factoryFor(t, withActions)(ctx, newProcess(kernel.AgentJobSimple, sc))
+		gt.NoError(t, err).Required()
 		// Each read tool is offered once, though the palette names both
 		// core_job and core_ro.
-		gt.Number(t, countOf(names, "core__list_actions")).Equal(1)
+		gt.Array(t, coreNames(tools)).Equal(allReads)
 	})
 
-	t.Run("a sub-agent given core_job still gets no writer", func(t *testing.T) {
-		factory, err := kernel.NewToolFactory(kernel.ToolDeps{
-			Repo:     repo,
-			Registry: testRegistry(withActions),
-			ActionUC: stubActionMutator{},
-		})
-		gt.NoError(t, err).Required()
-
+	t.Run("[case] actions: a sub-agent given core_job still gets no writer", func(t *testing.T) {
 		task := sc
 		task.ToolSets = []string{agent.ToolSetCoreJob, agent.ToolSetCore, agent.ToolSetCoreRO}
-		tools, err := factory(ctx, newProcess(kernel.AgentTask, task))
+		tools, err := factoryFor(t, withActions)(ctx, newProcess(kernel.AgentTask, task))
 		gt.NoError(t, err).Required()
-		gt.Array(t, toolNames(tools)).Equal([]string{"core__get_action", "core__list_actions"})
+		gt.Array(t, toolNames(tools)).Equal(allReads)
 	})
 
-	t.Run("a workspace without [case] actions gets none", func(t *testing.T) {
-		factory, err := kernel.NewToolFactory(kernel.ToolDeps{
-			Repo:     repo,
-			Registry: testRegistry(threadWorkspace()),
-			ActionUC: stubActionMutator{},
-		})
+	t.Run("without [case] actions: the case_ref lookups only", func(t *testing.T) {
+		tools, err := factoryFor(t, threadWorkspace())(ctx, newProcess(kernel.AgentJobSimple, sc))
 		gt.NoError(t, err).Required()
-
-		tools, err := factory(ctx, newProcess(kernel.AgentJobSimple, sc))
-		gt.NoError(t, err).Required()
-		gt.Bool(t, hasPrefixIn(toolNames(tools), "core__")).False()
+		gt.Array(t, coreNames(tools)).Equal(caseRefOnly)
 	})
 
 	t.Run("a Job without the grant gets none", func(t *testing.T) {
-		factory, err := kernel.NewToolFactory(kernel.ToolDeps{
-			Repo:     repo,
-			Registry: testRegistry(withActions),
-			ActionUC: stubActionMutator{},
-		})
-		gt.NoError(t, err).Required()
-
 		denied := sc
-		denied.ThreadModeActionReads = false
-		tools, err := factory(ctx, newProcess(kernel.AgentJobSimple, denied))
+		denied.ThreadModeReads = false
+		tools, err := factoryFor(t, withActions)(ctx, newProcess(kernel.AgentJobSimple, denied))
 		gt.NoError(t, err).Required()
 		gt.Bool(t, hasPrefixIn(toolNames(tools), "core__")).False()
 	})
-}
-
-func countOf(names []string, want string) int {
-	n := 0
-	for _, name := range names {
-		if name == want {
-			n++
-		}
-	}
-	return n
 }
 
 // TestToolFactoryBuildsTheJobPalette pins the unattended-run palette against

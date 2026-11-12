@@ -151,11 +151,11 @@ func TestDurableRuntime_SpawnCarriesTheJobsModelAndBudget(t *testing.T) {
 	gt.Value(t, plain.Budget).Equal(pricing.NanoUSD(0))
 }
 
-// A Job on a thread-mode workspace that enables [case] actions is granted the
-// action reads (and only the reads) through its scope. A thread-mode workspace
-// without the option, and a channel-mode one — whose Jobs already get the
-// Job-safe action set — carry no such grant.
-func TestDurableRuntime_SpawnGrantsActionReadsToAThreadModeWorkspaceWithActions(t *testing.T) {
+// A Job on a thread-mode workspace is granted the read half of core through its
+// scope, whether or not the workspace enables [case] actions: the kernel decides
+// at claim time whether that includes the action reads. A channel-mode Job,
+// which already gets the Job-safe action set, carries no such grant.
+func TestDurableRuntime_SpawnGrantsCoreReadsToAThreadModeJob(t *testing.T) {
 	cases := []struct {
 		name      string
 		mode      model.CaseMode
@@ -163,7 +163,7 @@ func TestDurableRuntime_SpawnGrantsActionReadsToAThreadModeWorkspaceWithActions(
 		wantReads bool
 	}{
 		{name: "thread mode with [case] actions", mode: model.CaseModeThread, actions: true, wantReads: true},
-		{name: "thread mode without [case] actions", mode: model.CaseModeThread, actions: false, wantReads: false},
+		{name: "thread mode without [case] actions", mode: model.CaseModeThread, actions: false, wantReads: true},
 		{name: "channel mode", mode: model.CaseModeChannel, actions: false, wantReads: false},
 	}
 	for _, tc := range cases {
@@ -202,7 +202,7 @@ func TestDurableRuntime_SpawnGrantsActionReadsToAThreadModeWorkspaceWithActions(
 			gt.NoError(t, err).Required()
 
 			sc := agentkernel.ScopeFrom(proc.Metadata)
-			gt.Value(t, sc.ThreadModeActionReads).Equal(tc.wantReads)
+			gt.Value(t, sc.ThreadModeReads).Equal(tc.wantReads)
 			// The Job is never given the mention turn's full action grant.
 			gt.Bool(t, sc.ThreadModeActions).False()
 		})

@@ -177,27 +177,24 @@ func (f ToolBuilderFunc) Build(ctx context.Context, c *model.Case, ws *model.Wor
 	return f(ctx, c, ws)
 }
 
-// ActionTools returns the action (core__*) tools an in-process Job tool builder
+// CoreTools returns the core (core__*) tools an in-process Job tool builder
 // hands a run on ws. It is the in-process counterpart of the kernel's
-// thread-mode gate (agentkernel.Scope.ThreadModeActionReads), so the CLI
+// thread-mode gate (agentkernel.Scope.ThreadModeReads), so the CLI
 // fallback and the eval harness cannot drift from the durable runtime:
 //
 //   - channel mode (or no workspace): the reads plus the Job-safe writers, which
 //     withhold archive / unarchive / delete_action_step;
 //   - thread mode with [case] actions: the reads only — the Job may consult the
 //     case's Actions but leaves them to the people working the case;
-//   - any other thread-mode workspace: none.
-//
-// core.NewReadOnly also carries the case_ref read tools, so thread mode without
-// [case] actions forgoes those along with the action tools, as it always has.
-func ActionTools(ws *model.WorkspaceEntry, deps core.Deps) []gollem.Tool {
+//   - any other thread-mode workspace: the case_ref lookups only.
+func CoreTools(ws *model.WorkspaceEntry, deps core.Deps) []gollem.Tool {
 	switch {
 	case !ws.IsThreadMode():
 		return append(core.NewReadOnly(deps), actionwriter.New(deps)...)
 	case ws.ActionsEnabled():
 		return core.NewReadOnly(deps)
 	default:
-		return nil
+		return core.NewCaseRef(deps)
 	}
 }
 
@@ -675,8 +672,8 @@ func (r *JobRunner) Run(ctx context.Context, j *model.Job, ev Event) error {
 			sessionThreadTS: sessionThreadTS,
 			// startedAt is the same instant PromptInputs.Now gave the planner's
 			// system prompt, so planner and sub-agents read one clock.
-			taskContext: caseTaskContext(key, c, startedAt),
-			actionReads: ws.IsThreadMode() && ws.ActionsEnabled(),
+			taskContext:     caseTaskContext(key, c, startedAt),
+			threadModeReads: ws.IsThreadMode(),
 		})
 		if spawnErr != nil {
 			// A busy subject cannot reach here: the caller holds the (workspace, case,

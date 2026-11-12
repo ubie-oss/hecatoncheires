@@ -306,6 +306,27 @@ func TestNew_ReturnsAllTools(t *testing.T) {
 	gt.Value(t, toolNames["core__delete_action_step"]).Equal(true)
 }
 
+// NewCaseRef carries the case_ref lookups and nothing else: a run given it can
+// resolve a case_ref field without being handed any action tool.
+func TestNewCaseRef_ReturnsOnlyTheCaseRefTools(t *testing.T) {
+	t.Run("the two lookups when a reader is wired", func(t *testing.T) {
+		tools := core.NewCaseRef(core.Deps{
+			Repo: newMockRepo(nil), WorkspaceID: testWorkspaceID, CaseID: testCaseID,
+			ActionUC: &mockActionMutator{}, CaseRefUC: &mockCaseRefReader{},
+		})
+		names := make([]string, 0, len(tools))
+		for _, tl := range tools {
+			names = append(names, tl.Spec().Name)
+		}
+		gt.Array(t, names).Equal([]string{"core__search_referenceable_cases", "core__get_referenceable_cases"})
+	})
+
+	t.Run("nothing without a reader", func(t *testing.T) {
+		tools := core.NewCaseRef(core.Deps{Repo: newMockRepo(nil), WorkspaceID: testWorkspaceID, CaseID: testCaseID})
+		gt.Array(t, tools).Length(0)
+	})
+}
+
 func TestNewForAssist_ReturnsSameTools(t *testing.T) {
 	repo := newMockRepo(nil)
 	tools := core.NewForAssist(core.Deps{Repo: repo, WorkspaceID: testWorkspaceID, CaseID: testCaseID, ActionUC: &mockActionMutator{}})

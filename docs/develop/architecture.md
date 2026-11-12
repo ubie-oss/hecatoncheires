@@ -216,14 +216,20 @@ so every entry point (GraphQL, Slack, agent tools, eval) is covered uniformly:
   `Scope.ThreadModeActions`, which its sub-agents inherit, and the kernel
   withholds the core toolset (`OmitCore`) from every other run there — create
   and materialize turns and the workspace agent, whose prompts are built
-  around the Case board status. Jobs of such a workspace are the one narrower
-  grant: the Job host sets `Scope.ThreadModeActionReads`, and the kernel builds
-  only the read half of the core toolset (`CoreReadOnly`), so `core_ro`
-  resolves and `core` / `core_job` resolve to nothing. The kernel re-checks
-  `ActionsEnabled()` at claim time, so a run spawned before the option was
-  turned off gets no action tools. The in-process Job tool builders (CLI
-  fallback and eval env) share the same decision through `job.ActionTools`,
-  and the Job system prompt lists the Actions as read-only.
+  around the Case board status. Jobs are the one narrower grant, in every
+  thread-mode workspace: the Job host sets `Scope.ThreadModeReads`, and the
+  kernel builds only the read half of the core toolset
+  (`ToolSetDeps.CoreAccess`), so `core_ro` resolves and `core` / `core_job`
+  resolve to nothing. That read half is the case_ref lookups
+  (`core__search_referenceable_cases` / `core__get_referenceable_cases`)
+  always — a case_ref field exists in either mode, and the Job can already set
+  one through `case__update_case` — plus the action reads when the workspace
+  sets `[case] actions = true` (`CoreAccessReadOnly` vs
+  `CoreAccessCaseRefOnly`). The kernel re-checks `ActionsEnabled()` at claim
+  time, so a run spawned before the option was turned off reads no Actions.
+  The in-process Job tool builders (CLI fallback and eval env) share the same
+  decision through `job.CoreTools`, and the Job system prompt lists the
+  Actions as read-only when they are readable.
 - **Thread-mode Jobs embed the thread's recent messages in the system prompt.**
   Because a thread-mode Job usually has no Actions to anchor on (it can only read them, and only with `[case] actions = true`), `JobRunner` loads the
   Case's recent Slack messages (`CaseMessageRepository.List`, bounded to the

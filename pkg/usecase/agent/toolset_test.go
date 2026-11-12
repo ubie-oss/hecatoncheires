@@ -398,28 +398,61 @@ func TestToolSetResolver_OmitCoreWithholdsBothCoreSets(t *testing.T) {
 	gt.Array(t, r.Resolve([]string{agent.ToolSetCoreRO})).Length(0)
 }
 
-// TestToolSetResolver_CoreReadOnlyBuildsOnlyTheReads pins the narrower grant a
-// thread-mode Job gets when its workspace enables [case] actions: core_ro
-// resolves to the read tools, and neither writer set resolves to anything, so
-// the probe filters core / core_job out of the palette.
-func TestToolSetResolver_CoreReadOnlyBuildsOnlyTheReads(t *testing.T) {
-	r := agent.NewToolSetResolver(agent.ToolSetDeps{
-		CoreReadOnly: true,
-		Core:         core.Deps{WorkspaceID: "ws", CaseID: 1},
+// stubCaseRefReader satisfies core.CaseRefReader so the case_ref tools are
+// built; the resolver tests never call them.
+type stubCaseRefReader struct{ core.CaseRefReader }
+
+// TestToolSetResolver_CoreAccess pins the narrower grants a thread-mode Job
+// gets: with [case] actions, core_ro resolves to the action reads plus the
+// case_ref lookups; without, to the case_ref lookups alone. Neither writer set
+// resolves in either, so the probe filters core / core_job out of the palette.
+func TestToolSetResolver_CoreAccess(t *testing.T) {
+	deps := core.Deps{WorkspaceID: "ws", CaseID: 1, CaseRefUC: stubCaseRefReader{}}
+
+	cases := []struct {
+		name   string
+		access agent.CoreAccess
+		want   []string
+	}{
+		{
+			name:   "read-only",
+			access: agent.CoreAccessReadOnly,
+			want: []string{
+				"core__get_action", "core__get_referenceable_cases",
+				"core__list_actions", "core__search_referenceable_cases",
+			},
+		},
+		{
+			name:   "case_ref only",
+			access: agent.CoreAccessCaseRefOnly,
+			want:   []string{"core__get_referenceable_cases", "core__search_referenceable_cases"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := agent.NewToolSetResolver(agent.ToolSetDeps{CoreAccess: tc.access, Core: deps})
+			gt.Array(t, toolNames(r.Resolve([]string{agent.ToolSetCoreRO}))).Equal(tc.want)
+			gt.Array(t, r.Resolve([]string{agent.ToolSetCore})).Length(0)
+			gt.Array(t, r.Resolve([]string{agent.ToolSetCoreJob})).Length(0)
+			gt.Bool(t, r.Has(agent.ToolSetCoreRO)).True()
+			gt.Bool(t, r.Has(agent.ToolSetCore)).False()
+			gt.Bool(t, r.Has(agent.ToolSetCoreJob)).False()
+		})
+	}
+
+	t.Run("case_ref only without a reader resolves to nothing", func(t *testing.T) {
+		r := agent.NewToolSetResolver(agent.ToolSetDeps{
+			CoreAccess: agent.CoreAccessCaseRefOnly,
+			Core:       core.Deps{WorkspaceID: "ws", CaseID: 1},
+		})
+		gt.Bool(t, r.Has(agent.ToolSetCoreRO)).False()
 	})
-	gt.Array(t, toolNames(r.Resolve([]string{agent.ToolSetCoreRO}))).
-		Equal([]string{"core__get_action", "core__list_actions"})
-	gt.Array(t, r.Resolve([]string{agent.ToolSetCore})).Length(0)
-	gt.Array(t, r.Resolve([]string{agent.ToolSetCoreJob})).Length(0)
-	gt.Bool(t, r.Has(agent.ToolSetCoreRO)).True()
-	gt.Bool(t, r.Has(agent.ToolSetCore)).False()
-	gt.Bool(t, r.Has(agent.ToolSetCoreJob)).False()
 
 	t.Run("OmitCore takes precedence", func(t *testing.T) {
 		both := agent.NewToolSetResolver(agent.ToolSetDeps{
-			OmitCore:     true,
-			CoreReadOnly: true,
-			Core:         core.Deps{WorkspaceID: "ws", CaseID: 1},
+			OmitCore:   true,
+			CoreAccess: agent.CoreAccessReadOnly,
+			Core:       deps,
 		})
 		gt.Array(t, both.Resolve([]string{agent.ToolSetCoreRO})).Length(0)
 	})

@@ -775,9 +775,9 @@ func buildJobTools(deps jobRuntimeDeps, adapters jobToolAdapters, c *model.Case,
 	}
 
 	out := make([]gollem.Tool, 0, 16)
-	// Action tools follow the workspace mode and [case] actions; see
-	// job.ActionTools, which the eval harness shares.
-	out = append(out, job.ActionTools(ws, coreDeps)...)
+	// Core tools follow the workspace mode and [case] actions; see
+	// job.CoreTools, which the eval harness shares.
+	out = append(out, job.CoreTools(ws, coreDeps)...)
 	out = append(out, casewriter.New(casewriter.Deps{
 		CaseUC:      adapters.caseUC,
 		WorkspaceID: wsID,

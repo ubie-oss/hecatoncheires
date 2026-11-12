@@ -176,11 +176,12 @@ var KnownToolSetIDsAssist = []string{
 // memos and knowledge. Compared with the interactive mention agent it withholds
 // archive / unarchive / delete_action_step (see ToolSetCoreJob) and GitHub.
 //
-// core_ro is listed beside core_job for a thread-mode workspace that enables
-// [case] actions: there a Job may read the case's Actions but not write them
-// (ToolSetDeps.CoreReadOnly), so core_job resolves to nothing and core_ro is
-// the id that carries the reads. Where core_job does resolve, Resolve drops
-// core_ro from a request naming both, so no tool is offered twice.
+// core_ro is listed beside core_job for a thread-mode workspace: there a Job
+// gets only the read half of core (ToolSetDeps.CoreAccess) — the case_ref
+// lookups always, and the action reads when the workspace enables
+// [case] actions — so core_job resolves to nothing and core_ro is the id that
+// carries the reads. Where core_job does resolve, Resolve drops core_ro from a
+// request naming both, so no tool is offered twice.
 var KnownToolSetIDsJob = []string{
 	ToolSetCoreJob,
 	ToolSetCoreRO,
@@ -347,18 +348,19 @@ type ToolSetDeps struct {
 
 	// OmitCore omits the core (action) toolset entirely. Set for every run on a
 	// thread-mode workspace except the mention turn (see
-	// kernel.Scope.ThreadModeActions): those agents are given no Actions, so
+	// kernel.Scope.ThreadModeActions) and Jobs, which get a narrower CoreAccess
+	// (kernel.Scope.ThreadModeReads): those agents are given no Actions, so
 	// even the read-only list/get-action tools must not exist. Without this the
 	// resolver would always build them (they only need Repo), since the
 	// core read tools do not depend on ActionUC being wired.
 	OmitCore bool
 
-	// CoreReadOnly builds only the read half of the core (action) toolset:
-	// core_ro resolves to list / get actions (and their steps), while core and
-	// core_job resolve to nothing. Set for a Job on a thread-mode workspace that
-	// enables [case] actions (kernel.Scope.ThreadModeActionReads). OmitCore
-	// takes precedence when both are set.
-	CoreReadOnly bool
+	// CoreAccess narrows the core toolset below the full set; the zero value
+	// (CoreAccessFull) builds every core tool. A Job on a thread-mode workspace
+	// (kernel.Scope.ThreadModeReads) gets CoreAccessReadOnly when the workspace
+	// enables [case] actions and CoreAccessCaseRefOnly otherwise. OmitCore
+	// takes precedence over it.
+	CoreAccess CoreAccess
 
 	// CaseMulti backs the case_multi (cross-case) toolset. Built only when
 	// CaseMulti.CaseUC is non-nil (the workspace-channel host wires it); a nil
@@ -376,6 +378,22 @@ type ToolSetDeps struct {
 	WSMeta wsmeta.Deps
 }
 
+// CoreAccess is how much of the core toolset a run is built with.
+type CoreAccess int
+
+const (
+	// CoreAccessFull builds every core tool: core_ro, core and core_job.
+	CoreAccessFull CoreAccess = iota
+	// CoreAccessReadOnly builds only core_ro — list / get actions, their
+	// steps, and the case_ref lookups. core and core_job resolve to nothing.
+	CoreAccessReadOnly
+	// CoreAccessCaseRefOnly builds core_ro with the case_ref lookups alone
+	// (core__search_referenceable_cases / core__get_referenceable_cases), for a
+	// run on a workspace whose Cases have no Actions but whose case_ref fields
+	// still need resolving. core and core_job resolve to nothing.
+	CoreAccessCaseRefOnly
+)
+
 // NewToolSetResolver builds the per-toolset slices once so each sub-agent
 // just picks the union of its requested IDs. The "core" pool is the read-only
 // subset (list / get only) — investigation sub-agents must not mutate the
@@ -387,8 +405,10 @@ func NewToolSetResolver(d ToolSetDeps) *ToolSetResolver {
 	switch {
 	case d.OmitCore:
 		// No action tools at all, not even the reads.
-	case d.CoreReadOnly:
+	case d.CoreAccess == CoreAccessReadOnly:
 		coreTools = core.NewReadOnly(d.Core)
+	case d.CoreAccess == CoreAccessCaseRefOnly:
+		coreTools = core.NewCaseRef(d.Core)
 	default:
 		coreTools = core.NewReadOnly(d.Core)
 		coreFullTools = core.New(d.Core)

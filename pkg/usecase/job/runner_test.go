@@ -3470,20 +3470,22 @@ func (e *payloadEmittingExecutor) Execute(ctx context.Context, req jobagent.Exec
 	return &jobagent.ExecuteResult{Status: jobagent.ExecuteStatusSuccess}, nil
 }
 
-// TestActionTools pins which action tools an in-process Job tool builder hands
-// a run: the Job-safe set in channel mode, the reads only in a thread-mode
-// workspace enabling [case] actions, and none in any other thread-mode one.
-func TestActionTools(t *testing.T) {
-	deps := core.Deps{WorkspaceID: "ws", CaseID: 1}
+type stubCaseRefReader struct{ core.CaseRefReader }
+
+// TestCoreTools pins which core tools an in-process Job tool builder hands a
+// run: the Job-safe action set in channel mode, the action and case_ref reads
+// in a thread-mode workspace enabling [case] actions, and the case_ref lookups
+// alone in any other thread-mode one.
+func TestCoreTools(t *testing.T) {
+	deps := core.Deps{WorkspaceID: "ws", CaseID: 1, CaseRefUC: stubCaseRefReader{}}
 	namesOf := func(ws *model.WorkspaceEntry) []string {
 		var names []string
-		for _, tl := range job.ActionTools(ws, deps) {
+		for _, tl := range job.CoreTools(ws, deps) {
 			names = append(names, tl.Spec().Name)
 		}
 		sort.Strings(names)
 		return names
 	}
-	readOnly := []string{"core__get_action", "core__list_actions"}
 
 	t.Run("channel mode gets the Job-safe set", func(t *testing.T) {
 		names := namesOf(&model.WorkspaceEntry{Workspace: model.Workspace{ID: "ws"}})
@@ -3491,8 +3493,10 @@ func TestActionTools(t *testing.T) {
 			"core__add_action_step",
 			"core__create_action",
 			"core__get_action",
+			"core__get_referenceable_cases",
 			"core__list_actions",
 			"core__rename_action_step",
+			"core__search_referenceable_cases",
 			"core__set_action_assignee",
 			"core__set_action_step_done",
 			"core__update_action",
@@ -3508,13 +3512,18 @@ func TestActionTools(t *testing.T) {
 		names := namesOf(&model.WorkspaceEntry{
 			Workspace: model.Workspace{ID: "ws"}, CaseMode: model.CaseModeThread, CaseActions: true,
 		})
-		gt.Array(t, names).Equal(readOnly)
+		gt.Array(t, names).Equal([]string{
+			"core__get_action",
+			"core__get_referenceable_cases",
+			"core__list_actions",
+			"core__search_referenceable_cases",
+		})
 	})
 
-	t.Run("thread mode without [case] actions gets none", func(t *testing.T) {
+	t.Run("thread mode without [case] actions gets the case_ref lookups only", func(t *testing.T) {
 		names := namesOf(&model.WorkspaceEntry{
 			Workspace: model.Workspace{ID: "ws"}, CaseMode: model.CaseModeThread,
 		})
-		gt.Array(t, names).Length(0)
+		gt.Array(t, names).Equal([]string{"core__get_referenceable_cases", "core__search_referenceable_cases"})
 	})
 }

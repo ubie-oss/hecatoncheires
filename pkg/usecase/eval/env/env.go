@@ -520,8 +520,8 @@ func buildJobRunner(
 			CaseRefUC:    uc.Case,
 		}
 		out := make([]gollem.Tool, 0, 16)
-		// Same action tools as the production Job runtime (job.ActionTools).
-		out = append(out, job.ActionTools(ws, coreDeps)...)
+		// Same core tools as the production Job runtime (job.CoreTools).
+		out = append(out, job.CoreTools(ws, coreDeps)...)
 		out = append(out, casewriter.New(casewriter.Deps{
 			CaseUC:      caseAdapter,
 			WorkspaceID: wsID,

@@ -352,7 +352,7 @@ func buildSystemPromptData(in PromptInputs) systemPromptData {
 
 	// A Job writes Actions only in a channel-mode workspace. A thread-mode
 	// workspace gives it no action tools unless it enables [case] actions, and
-	// then only the read tools (agentkernel.Scope.ThreadModeActionReads), so the
+	// then only the read tools (agentkernel.Scope.ThreadModeReads), so the
 	// prompt lists the Actions without advertising any action write. A nil
 	// workspace defaults to channel-mode (actions on).
 	data.ThreadMode = in.Workspace.IsThreadMode()

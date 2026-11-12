@@ -40,8 +40,8 @@ const (
 	metaLLMModel     = "llm_model"
 	metaBudget       = "budget_nano_usd"
 
-	metaThreadModeActions     = "thread_mode_actions"
-	metaThreadModeActionReads = "thread_mode_action_reads"
+	metaThreadModeActions = "thread_mode_actions"
+	metaThreadModeReads   = "thread_mode_reads"
 )
 
 // ToolSetsAll is the toolsets value meaning "everything this agent kind is
@@ -151,15 +151,16 @@ type Scope struct {
 	// Process inherits the flag with the metadata, which is what lets the
 	// mention turn's sub-agents carry out the action writes it plans.
 	ThreadModeActions bool
-	// ThreadModeActionReads grants ONLY the read half of the action toolset
-	// (core_ro: list / get actions and their steps) to a run on a thread-mode
-	// workspace. The Job host sets it when the workspace enables
-	// [case] actions: an unattended run may consult the case's Actions to
-	// decide what to do, but the Actions of a thread-mode workspace are left to
+	// ThreadModeReads grants ONLY the read half of the core toolset (core_ro)
+	// to a run on a thread-mode workspace: the case_ref lookups always, and
+	// list / get actions (and their steps) when the workspace enables
+	// [case] actions — decided when the run's tools are built, not here. The Job
+	// host sets it on every thread-mode run: an unattended run may consult what
+	// it needs to decide, but the Actions of a thread-mode workspace are left to
 	// the people and the mention agent working the case, so the Job is given no
 	// action writer. It is ignored when ThreadModeActions is set, which already
 	// grants the reads along with the writes.
-	ThreadModeActionReads bool
+	ThreadModeReads bool
 }
 
 // Validate enforces the invariants the claim path depends on, so a wiring
@@ -261,8 +262,8 @@ func (s Scope) Metadata() map[string]string {
 	if s.ThreadModeActions {
 		m[metaThreadModeActions] = "1"
 	}
-	if s.ThreadModeActionReads {
-		m[metaThreadModeActionReads] = "1"
+	if s.ThreadModeReads {
+		m[metaThreadModeReads] = "1"
 	}
 	return m
 }
@@ -298,8 +299,8 @@ func ScopeFrom(m map[string]string) Scope {
 		LLMModel:     m[metaLLMModel],
 		Budget:       pricing.NanoUSD(budget),
 
-		ThreadModeActions:     m[metaThreadModeActions] == "1",
-		ThreadModeActionReads: m[metaThreadModeActionReads] == "1",
+		ThreadModeActions: m[metaThreadModeActions] == "1",
+		ThreadModeReads:   m[metaThreadModeReads] == "1",
 	}
 }
 
