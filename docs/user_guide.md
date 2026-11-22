@@ -91,7 +91,8 @@ Closed Cases pile up in the **Closed** tab and in the closed columns of the Case
 - **Archiving does not change the lifecycle status.** The Case stays CLOSED, and a thread-mode Case keeps its board status. Visibility is decided by the pair (status, archived or not).
 - **An archived Case cannot go back to Open.** `reopenCase` and a board-status change are both rejected while it is archived — that state would appear in no listing at all. Restore it first, then reopen.
 - **The detail page stays reachable.** An archived Case opens normally by URL or from the Archived tab, with an **Archived** badge in the header. Only the listings drop it.
-- **Child Actions and Memos are untouched.** They keep their own archive state; archiving the Case does not archive them.
+- **An archived Case is read-only.** Its title, description, custom fields, test flag, assignees, agent settings and status cannot be changed, and nothing can be added to or edited under it: no new Action or Memo, no Action edit (including moving an Action into it), no step or comment change, no Memo edit. Every such write is rejected with the GraphQL code `CONFLICT` (`ErrCaseArchived`), whichever entry point it comes from — Web UI, Slack, or an agent tool. Restore the Case first. Archive / Unarchive themselves, and the background sync of the Slack channel's members (which decides private-Case access), are not content changes and keep working.
+- **Child Actions and Memos keep their own archive state.** Archiving the Case does not archive them, and they can still be archived or restored individually.
 
 ### Where an archived Case disappears from
 
@@ -798,6 +799,14 @@ Schema additions are listed in `graphql/schema.graphql`:
   `deleteActionStep`
 - Inputs: `AddActionStepInput`, `SetActionStepDoneInput`,
   `RenameActionStepInput`, `DeleteActionStepInput`
+
+An archived Action is read-only: its title, description, status, assignee,
+due date and parent Case cannot be changed, and its steps and comments can be
+neither added, edited nor removed. Such a write is rejected with the GraphQL
+code `CONFLICT` (`ErrActionArchived`) from every entry point, including the
+status / assignee controls on the Action's Slack message and the agent tools.
+Unarchive it first. The same holds for every Action of an archived Case (see
+[Archiving a Case](#archiving-a-case)).
 
 Action archiving mutations (in `graphql/schema.graphql`):
 

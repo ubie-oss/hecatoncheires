@@ -125,3 +125,43 @@ func TestLoadCaseForWrite(t *testing.T) {
 		gt.NoError(t, err)
 	})
 }
+
+func TestAssertCaseNotArchived(t *testing.T) {
+	archivedAt := time.Now().UTC()
+
+	t.Run("active case passes", func(t *testing.T) {
+		gt.NoError(t, usecase.AssertCaseNotArchivedForTest(&model.Case{ID: 1, Status: types.CaseStatusOpen}))
+	})
+	t.Run("archived case is rejected", func(t *testing.T) {
+		err := usecase.AssertCaseNotArchivedForTest(&model.Case{ID: 2, Status: types.CaseStatusClosed, ArchivedAt: &archivedAt})
+		gt.Error(t, err).Is(usecase.ErrCaseArchived)
+	})
+	t.Run("nil case fails closed with ErrCaseNotFound", func(t *testing.T) {
+		gt.Error(t, usecase.AssertCaseNotArchivedForTest(nil)).Is(usecase.ErrCaseNotFound)
+	})
+}
+
+func TestAssertActionWritable(t *testing.T) {
+	archivedAt := time.Now().UTC()
+	activeCase := &model.Case{ID: 1, Status: types.CaseStatusOpen}
+	archivedCase := &model.Case{ID: 2, Status: types.CaseStatusClosed, ArchivedAt: &archivedAt}
+	activeAction := &model.Action{ID: 10, CaseID: 1}
+	archivedAction := &model.Action{ID: 11, CaseID: 1, ArchivedAt: &archivedAt}
+
+	t.Run("active action on an active case passes", func(t *testing.T) {
+		gt.NoError(t, usecase.AssertActionWritableForTest(activeAction, activeCase))
+	})
+	t.Run("archived action is rejected", func(t *testing.T) {
+		gt.Error(t, usecase.AssertActionWritableForTest(archivedAction, activeCase)).Is(usecase.ErrActionArchived)
+	})
+	t.Run("active action on an archived case is rejected", func(t *testing.T) {
+		gt.Error(t, usecase.AssertActionWritableForTest(activeAction, archivedCase)).Is(usecase.ErrCaseArchived)
+	})
+	t.Run("the archived case is reported ahead of the archived action", func(t *testing.T) {
+		err := usecase.AssertActionWritableForTest(archivedAction, archivedCase)
+		gt.Error(t, err).Is(usecase.ErrCaseArchived)
+	})
+	t.Run("nil action fails closed with ErrActionNotFound", func(t *testing.T) {
+		gt.Error(t, usecase.AssertActionWritableForTest(nil, activeCase)).Is(usecase.ErrActionNotFound)
+	})
+}

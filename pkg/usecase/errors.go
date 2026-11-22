@@ -47,10 +47,15 @@ var (
 	// ErrCaseNotArchived is returned by UnarchiveCase when the case is not
 	// archived.
 	ErrCaseNotArchived = errors.New("case is not archived")
-	// ErrCaseArchived is returned by ReopenCase / UpdateCaseStatus when the
-	// targeted case is archived. An archived case that went back to OPEN would
-	// appear in no list, no board, no dashboard and no Job scan — unreachable
-	// state. Unarchive it first.
+	// ErrCaseArchived is returned by every write that would change the content
+	// of an archived case or of something recorded on it: its title,
+	// description, fields, assignees, agent settings and status (ReopenCase /
+	// UpdateCaseStatus included — an archived case that went back to OPEN would
+	// appear in no list, no board, no dashboard and no Job scan), and the
+	// creation or edit of its Actions (with their steps and comments) and Memos.
+	// An archived case is read-only; unarchive it first. Archive / unarchive
+	// themselves and the Slack channel member sync are not content writes and
+	// stay allowed.
 	ErrCaseArchived = errors.New("case is archived")
 	// ErrMissingRequiredOnSubmit is returned by SubmitDraft when the draft
 	// is missing one or more required custom fields. The wrapping goerr
@@ -129,6 +134,11 @@ var (
 	// Action archive state errors
 	ErrActionAlreadyArchived = errors.New("action is already archived")
 	ErrActionNotArchived     = errors.New("action is not archived")
+	// ErrActionArchived is returned by every write that would change the
+	// content of an archived Action: its title, description, status, assignee,
+	// due date or parent case, and its steps and comments. An archived Action is
+	// read-only; unarchive it first.
+	ErrActionArchived = errors.New("action is archived")
 
 	// Access control errors
 	ErrAccessDenied = errors.New("access denied to private case")

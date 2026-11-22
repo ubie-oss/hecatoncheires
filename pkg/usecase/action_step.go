@@ -104,6 +104,11 @@ func (uc *ActionStepUseCase) loadActionForStepMutation(ctx context.Context, work
 		return nil, nil, goerr.Wrap(ErrAccessDenied, "cannot mutate action step in private case",
 			goerr.V(ActionIDKey, actionID), goerr.V("user_id", actorID))
 	}
+	// Steps are part of the Action's content: none may change while the Action
+	// or its Case is archived.
+	if err := assertActionWritable(action, parentCase); err != nil {
+		return nil, nil, goerr.Wrap(err, "cannot mutate action step", goerr.V(ActionIDKey, actionID))
+	}
 
 	return action, parentCase, nil
 }

@@ -321,6 +321,9 @@ func (uc *ActionUseCase) CreateAction(ctx context.Context, workspaceID string, c
 	if err := assertCaseWriteAccess(caseModel, actorID, checkAccess); err != nil {
 		return nil, err
 	}
+	if err := assertCaseNotArchived(caseModel); err != nil {
+		return nil, goerr.Wrap(err, "cannot create action")
+	}
 
 	if err := uc.ensureCaseAcceptsActions(workspaceID, caseModel); err != nil {
 		return nil, err
@@ -535,6 +538,10 @@ func (uc *ActionUseCase) UpdateAction(ctx context.Context, workspaceID string, i
 	if err := assertCaseWriteAccess(parentCase, actorID, checkAccess); err != nil {
 		return nil, goerr.Wrap(err, "cannot update action", goerr.V(ActionIDKey, in.ID))
 	}
+	// An archived Action, or one under an archived Case, is read-only.
+	if err := assertActionWritable(existing, parentCase); err != nil {
+		return nil, goerr.Wrap(err, "cannot update action", goerr.V(ActionIDKey, in.ID))
+	}
 
 	if in.CaseID != nil && *in.CaseID != existing.CaseID {
 		newCase, err := uc.repo.Case().Get(ctx, workspaceID, *in.CaseID)
@@ -544,9 +551,13 @@ func (uc *ActionUseCase) UpdateAction(ctx context.Context, workspaceID string, i
 				goerr.V(ActionIDKey, in.ID))
 		}
 		// Reparenting must not move an action into a case whose workspace has
-		// no Actions. Same boundary invariant as CreateAction.
+		// no Actions, nor into an archived case. Same boundary invariants as
+		// CreateAction.
 		if err := uc.ensureCaseAcceptsActions(workspaceID, newCase); err != nil {
 			return nil, err
+		}
+		if err := assertCaseNotArchived(newCase); err != nil {
+			return nil, goerr.Wrap(err, "cannot move action", goerr.V(ActionIDKey, in.ID))
 		}
 	}
 

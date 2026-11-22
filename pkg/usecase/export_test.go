@@ -140,6 +140,8 @@ var (
 	TokenActorForTest            = tokenActor
 	LoadCaseForWriteForTest      = loadCaseForWrite
 	ActorForAccessForTest        = actorForAccess
+	AssertCaseNotArchivedForTest = assertCaseNotArchived
+	AssertActionWritableForTest  = assertActionWritable
 )
 
 // NewWelcomeRendererForTest is exported for testing

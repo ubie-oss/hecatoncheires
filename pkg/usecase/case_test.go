@@ -5347,6 +5347,122 @@ func TestCaseUseCase_ArchivedCaseCannotReturnToOpen(t *testing.T) {
 	})
 }
 
+// TestCaseUseCase_ArchivedCaseIsReadOnly pins that every content write on an
+// archived case is rejected with ErrCaseArchived before anything is persisted,
+// and that unarchiving makes the case editable again.
+func TestCaseUseCase_ArchivedCaseIsReadOnly(t *testing.T) {
+	const assignee = "U-ASSIGNEE"
+
+	setup := func(t *testing.T) (*usecase.CaseUseCase, *memory.Repository, *model.Case) {
+		t.Helper()
+		repo := memory.New()
+		uc := usecase.NewCaseUseCase(repo, nil, nil, nil, "")
+		gt.NoError(t, repo.SlackUser().SaveMany(context.Background(), []*model.SlackUser{
+			{ID: model.SlackUserID(assignee), Name: "alice"},
+			{ID: "U-OTHER", Name: "bob"},
+		})).Required()
+		c := seedArchiveCase(t, repo, &model.Case{
+			Title:                 "Archived title",
+			Description:           "Archived description",
+			Status:                types.CaseStatusClosed,
+			AssigneeIDs:           []string{assignee},
+			AgentAdditionalPrompt: "original prompt",
+		})
+		_, err := uc.ArchiveCase(archiveTestCtx(), testWorkspaceID, c.ID)
+		gt.NoError(t, err).Required()
+		return uc, repo, c
+	}
+
+	assertUnchanged := func(t *testing.T, repo *memory.Repository, id int64) {
+		t.Helper()
+		stored, err := repo.Case().Get(context.Background(), testWorkspaceID, id)
+		gt.NoError(t, err).Required()
+		gt.Bool(t, stored.IsArchived()).True()
+		gt.String(t, stored.Title).Equal("Archived title")
+		gt.String(t, stored.Description).Equal("Archived description")
+		gt.Value(t, stored.Status).Equal(types.CaseStatusClosed)
+		gt.Value(t, stored.AssigneeIDs).Equal([]string{assignee})
+		gt.String(t, stored.AgentAdditionalPrompt).Equal("original prompt")
+		gt.Bool(t, stored.IsTest).False()
+	}
+
+	writes := map[string]func(ctx context.Context, uc *usecase.CaseUseCase, id int64) error{
+		"UpdateCase title": func(ctx context.Context, uc *usecase.CaseUseCase, id int64) error {
+			title := "New title"
+			_, err := uc.UpdateCase(ctx, testWorkspaceID, id, usecase.CaseUpdate{Title: &title})
+			return err
+		},
+		"UpdateCase description": func(ctx context.Context, uc *usecase.CaseUseCase, id int64) error {
+			desc := "New description"
+			_, err := uc.UpdateCase(ctx, testWorkspaceID, id, usecase.CaseUpdate{Description: &desc})
+			return err
+		},
+		"UpdateCase isTest": func(ctx context.Context, uc *usecase.CaseUseCase, id int64) error {
+			isTest := true
+			_, err := uc.UpdateCase(ctx, testWorkspaceID, id, usecase.CaseUpdate{IsTest: &isTest})
+			return err
+		},
+		"AssignCase": func(ctx context.Context, uc *usecase.CaseUseCase, id int64) error {
+			_, err := uc.AssignCase(ctx, testWorkspaceID, id, []string{"U-OTHER"})
+			return err
+		},
+		"AssignCase with empty input": func(ctx context.Context, uc *usecase.CaseUseCase, id int64) error {
+			_, err := uc.AssignCase(ctx, testWorkspaceID, id, nil)
+			return err
+		},
+		"UnassignCase": func(ctx context.Context, uc *usecase.CaseUseCase, id int64) error {
+			_, err := uc.UnassignCase(ctx, testWorkspaceID, id, []string{assignee})
+			return err
+		},
+		"UpdateAgentSettings": func(ctx context.Context, uc *usecase.CaseUseCase, id int64) error {
+			_, err := uc.UpdateAgentSettings(ctx, testWorkspaceID, id, "new prompt", nil)
+			return err
+		},
+		"CloseCase": func(ctx context.Context, uc *usecase.CaseUseCase, id int64) error {
+			_, err := uc.CloseCase(ctx, testWorkspaceID, id)
+			return err
+		},
+		"MaterializeThreadCase": func(ctx context.Context, uc *usecase.CaseUseCase, id int64) error {
+			_, err := uc.MaterializeThreadCase(ctx, testWorkspaceID, id, "New title", "New description", nil)
+			return err
+		},
+	}
+
+	for name, write := range writes {
+		t.Run(name+" is rejected", func(t *testing.T) {
+			uc, repo, c := setup(t)
+			err := write(archiveTestCtx(), uc, c.ID)
+			gt.Error(t, err).Is(usecase.ErrCaseArchived)
+			assertUnchanged(t, repo, c.ID)
+		})
+
+		// The agent / system path carries no auth token; the archive rule is
+		// not an access-control decision, so it holds there too.
+		t.Run(name+" is rejected without an auth token", func(t *testing.T) {
+			uc, repo, c := setup(t)
+			err := write(context.Background(), uc, c.ID)
+			gt.Error(t, err).Is(usecase.ErrCaseArchived)
+			assertUnchanged(t, repo, c.ID)
+		})
+	}
+
+	t.Run("unarchived case accepts edits again", func(t *testing.T) {
+		uc, repo, c := setup(t)
+		ctx := archiveTestCtx()
+		_, err := uc.UnarchiveCase(ctx, testWorkspaceID, c.ID)
+		gt.NoError(t, err).Required()
+
+		title := "New title"
+		_, err = uc.UpdateCase(ctx, testWorkspaceID, c.ID, usecase.CaseUpdate{Title: &title})
+		gt.NoError(t, err).Required()
+
+		stored, err := repo.Case().Get(ctx, testWorkspaceID, c.ID)
+		gt.NoError(t, err).Required()
+		gt.String(t, stored.Title).Equal("New title")
+		gt.Bool(t, stored.IsArchived()).False()
+	})
+}
+
 func TestCaseUseCase_ListCases_ArchiveScope(t *testing.T) {
 	repo := memory.New()
 	uc := usecase.NewCaseUseCase(repo, nil, nil, nil, "")

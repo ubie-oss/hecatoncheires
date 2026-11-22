@@ -107,6 +107,9 @@ func ErrorCode(err error) string {
 		return ErrCodeForbidden
 	case errors.Is(err, usecase.ErrCaseAlreadyClosed),
 		errors.Is(err, usecase.ErrCaseAlreadyOpen),
+		errors.Is(err, usecase.ErrCaseArchived),
+		errors.Is(err, usecase.ErrActionArchived),
+		errors.Is(err, usecase.ErrMemoArchived),
 		errors.Is(err, usecase.ErrJobAlreadyRunning),
 		errors.Is(err, usecase.ErrTagInUse),
 		errors.Is(err, usecase.ErrDuplicateField):

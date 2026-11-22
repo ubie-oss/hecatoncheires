@@ -21,6 +21,10 @@ var ErrMemoNotEnabled = goerr.New("memo feature is not enabled for this workspac
 // ErrMemoNotFound is returned when a memo cannot be located within its Case.
 var ErrMemoNotFound = goerr.New("memo not found")
 
+// ErrMemoArchived is returned when UpdateMemo targets an archived memo. An
+// archived memo is read-only; unarchive it first.
+var ErrMemoArchived = goerr.New("memo is archived")
+
 // MemoUseCase orchestrates Case-scoped memo operations. Every write funnels
 // through the same field validation + access control gate so the GraphQL/WebUI
 // path and the agent-tool path enforce identical rules.
@@ -114,8 +118,12 @@ func (uc *MemoUseCase) CreateMemo(ctx context.Context, workspaceID string, in Cr
 	if !uc.memoEnabled(workspaceID) {
 		return nil, goerr.Wrap(ErrMemoNotEnabled, "memo create rejected", goerr.V("workspace_id", workspaceID))
 	}
-	if _, err := loadCaseForWrite(ctx, uc.repo, workspaceID, in.CaseID); err != nil {
+	parent, err := loadCaseForWrite(ctx, uc.repo, workspaceID, in.CaseID)
+	if err != nil {
 		return nil, err
+	}
+	if err := assertCaseNotArchived(parent); err != nil {
+		return nil, goerr.Wrap(err, "memo create rejected")
 	}
 
 	enriched, err := uc.validateMemoFields(ctx, workspaceID, in.FieldValues)
@@ -151,13 +159,23 @@ func (uc *MemoUseCase) UpdateMemo(ctx context.Context, workspaceID string, in Up
 	if !uc.memoEnabled(workspaceID) {
 		return nil, goerr.Wrap(ErrMemoNotEnabled, "memo update rejected", goerr.V("workspace_id", workspaceID))
 	}
-	if _, err := loadCaseForWrite(ctx, uc.repo, workspaceID, in.CaseID); err != nil {
+	parent, err := loadCaseForWrite(ctx, uc.repo, workspaceID, in.CaseID)
+	if err != nil {
 		return nil, err
+	}
+	if err := assertCaseNotArchived(parent); err != nil {
+		return nil, goerr.Wrap(err, "memo update rejected", goerr.V("memo_id", in.ID))
 	}
 
 	memo, err := uc.repo.Memo().Get(ctx, workspaceID, in.CaseID, in.ID)
 	if err != nil {
 		return nil, goerr.Wrap(ErrMemoNotFound, "memo not found",
+			goerr.V(CaseIDKey, in.CaseID), goerr.V("memo_id", in.ID))
+	}
+	// An archived memo is read-only. ArchiveMemo / UnarchiveMemo are the only
+	// writes it accepts.
+	if memo.IsArchived() {
+		return nil, goerr.Wrap(ErrMemoArchived, "archived memo cannot be edited; unarchive it first",
 			goerr.V(CaseIDKey, in.CaseID), goerr.V("memo_id", in.ID))
 	}
 

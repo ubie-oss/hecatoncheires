@@ -607,6 +607,71 @@ func TestActionCommentUseCase_Delete(t *testing.T) {
 	})
 }
 
+// TestActionCommentUseCase_ArchivedIsReadOnly pins that comments on an archived
+// Action, or on an Action of an archived Case, can be neither created, edited
+// nor deleted, and that a refusal writes and announces nothing.
+func TestActionCommentUseCase_ArchivedIsReadOnly(t *testing.T) {
+	archiveAction := func(t *testing.T, f *commentTestFixture) {
+		t.Helper()
+		a, err := f.repo.Action().Get(context.Background(), testWorkspaceID, f.action.ID)
+		gt.NoError(t, err).Required()
+		now := time.Now().UTC()
+		a.ArchivedAt = &now
+		_, err = f.repo.Action().Update(context.Background(), testWorkspaceID, a)
+		gt.NoError(t, err).Required()
+	}
+	archiveCase := func(t *testing.T, f *commentTestFixture) {
+		t.Helper()
+		c, err := f.repo.Case().Get(context.Background(), testWorkspaceID, f.caseModel.ID)
+		gt.NoError(t, err).Required()
+		now := time.Now().UTC()
+		c.Status = types.CaseStatusClosed
+		c.ArchivedAt = &now
+		_, err = f.repo.Case().Update(context.Background(), testWorkspaceID, c)
+		gt.NoError(t, err).Required()
+	}
+
+	for name, tc := range map[string]struct {
+		archive func(t *testing.T, f *commentTestFixture)
+		wantErr error
+	}{
+		"archived action": {archiveAction, usecase.ErrActionArchived},
+		"archived case":   {archiveCase, usecase.ErrCaseArchived},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newCommentTestFixture(t, commentFixtureOptions{})
+			comment, err := f.commentUC.Create(f.ctx(), usecase.CreateActionCommentInput{
+				WorkspaceID: testWorkspaceID, ActionID: f.action.ID, Body: "first note",
+			})
+			gt.NoError(t, err).Required()
+			tc.archive(t, f)
+			f.slack.threadCalls = nil
+
+			_, err = f.commentUC.Create(f.ctx(), usecase.CreateActionCommentInput{
+				WorkspaceID: testWorkspaceID, ActionID: f.action.ID, Body: "second note",
+			})
+			gt.Error(t, err).Is(tc.wantErr)
+
+			_, err = f.commentUC.Update(f.ctx(), usecase.UpdateActionCommentInput{
+				WorkspaceID: testWorkspaceID, ActionID: f.action.ID, CommentID: comment.ID, Body: "edited note",
+			})
+			gt.Error(t, err).Is(tc.wantErr)
+
+			err = f.commentUC.Delete(f.ctx(), usecase.DeleteActionCommentInput{
+				WorkspaceID: testWorkspaceID, ActionID: f.action.ID, CommentID: comment.ID,
+			})
+			gt.Error(t, err).Is(tc.wantErr)
+
+			comments, _, err := f.repo.ActionComment().List(context.Background(), testWorkspaceID, f.action.ID, 0, "")
+			gt.NoError(t, err).Required()
+			gt.Array(t, comments).Length(1).Required()
+			gt.String(t, comments[0].ID).Equal(comment.ID)
+			gt.String(t, comments[0].Body).Equal("first note")
+			gt.Array(t, f.slack.threadCalls).Length(0)
+		})
+	}
+}
+
 func TestActionCommentUseCase_List(t *testing.T) {
 	t.Run("a non-member of a private case sees nothing", func(t *testing.T) {
 		f := newCommentTestFixture(t, commentFixtureOptions{isPrivate: true})

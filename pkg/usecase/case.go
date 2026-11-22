@@ -1082,6 +1082,9 @@ func (uc *CaseUseCase) UpdateCase(ctx context.Context, workspaceID string, id in
 	if err != nil {
 		return nil, err
 	}
+	if err := assertCaseNotArchived(existingCase); err != nil {
+		return nil, err
+	}
 
 	// Apply the patch onto the loaded Case (PATCH, not PUT): only fields the
 	// caller actually set are overwritten; everything else — SlackThreadTS,
@@ -1185,6 +1188,9 @@ func (uc *CaseUseCase) AssignCase(ctx context.Context, workspaceID string, id in
 	if err != nil {
 		return nil, err
 	}
+	if err := assertCaseNotArchived(existingCase); err != nil {
+		return nil, err
+	}
 
 	// An empty input is a guaranteed no-op; short-circuit before the user
 	// existence check and the transaction.
@@ -1207,6 +1213,11 @@ func (uc *CaseUseCase) AssignCase(ctx context.Context, workspaceID string, id in
 		// previous attempt would announce assignees this attempt did not make.
 		added = nil
 		if err := assertCaseWriteAccess(c, actorID, checkAccess); err != nil {
+			return err
+		}
+		// Re-checked on the state actually written: the case may have been
+		// archived since the fail-fast read above.
+		if err := assertCaseNotArchived(c); err != nil {
 			return err
 		}
 		before := slices.Clone(c.AssigneeIDs)
@@ -1248,6 +1259,9 @@ func (uc *CaseUseCase) UnassignCase(ctx context.Context, workspaceID string, id 
 	if err != nil {
 		return nil, err
 	}
+	if err := assertCaseNotArchived(existingCase); err != nil {
+		return nil, err
+	}
 
 	if len(userIDs) == 0 {
 		return existingCase, nil
@@ -1258,6 +1272,9 @@ func (uc *CaseUseCase) UnassignCase(ctx context.Context, workspaceID string, id 
 	updated, txErr := uc.repo.Case().Transact(ctx, workspaceID, id, func(c *model.Case) error {
 		removed = nil
 		if err := assertCaseWriteAccess(c, actorID, checkAccess); err != nil {
+			return err
+		}
+		if err := assertCaseNotArchived(c); err != nil {
 			return err
 		}
 		before := slices.Clone(c.AssigneeIDs)
@@ -1329,6 +1346,9 @@ func diffAssignees(current, desired []string) (toAdd, toRemove []string) {
 func (uc *CaseUseCase) UpdateAgentSettings(ctx context.Context, workspaceID string, caseID int64, additionalPrompt string, enabledSourceIDs []model.SourceID) (*model.Case, error) {
 	existing, err := loadCaseForWrite(ctx, uc.repo, workspaceID, caseID)
 	if err != nil {
+		return nil, err
+	}
+	if err := assertCaseNotArchived(existing); err != nil {
 		return nil, err
 	}
 
@@ -1761,6 +1781,12 @@ func (uc *CaseUseCase) CloseCase(ctx context.Context, workspaceID string, id int
 		return nil, goerr.Wrap(ErrCaseThreadModeUseStatus, "thread-mode case cannot be closed directly", goerr.V(CaseIDKey, id))
 	}
 
+	// An archived case is CLOSED by construction; report the archive as the
+	// reason rather than "already closed", mirroring ReopenCase.
+	if err := assertCaseNotArchived(existing); err != nil {
+		return nil, err
+	}
+
 	status := existing.Status.Normalize()
 	if status == types.CaseStatusDraft {
 		return nil, goerr.Wrap(ErrCaseIsDraft, "draft case cannot be closed", goerr.V(CaseIDKey, id))
@@ -2087,6 +2113,9 @@ func (uc *CaseUseCase) MaterializeThreadCase(ctx context.Context, workspaceID st
 	existing, err := uc.repo.Case().Get(ctx, workspaceID, id)
 	if err != nil {
 		return nil, goerr.Wrap(ErrCaseNotFound, "case not found", goerr.V(CaseIDKey, id))
+	}
+	if err := assertCaseNotArchived(existing); err != nil {
+		return nil, err
 	}
 
 	if title != "" {
