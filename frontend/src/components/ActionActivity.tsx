@@ -103,6 +103,9 @@ interface ActionActivityProps {
    * by the surrounding page from the `?comment=` deep link the Slack
    * notification carries. */
   highlightCommentId?: string | null
+  /** Hide every control that writes a comment (composer, edit, delete): the
+   * Action or its Case is archived, and the server rejects comment writes. */
+  readOnly?: boolean
 }
 
 // Deep-linking to one comment must be able to reach it, so a deep-linked feed
@@ -251,7 +254,7 @@ const styles: Record<string, CSSProperties> = {
   composer: { paddingTop: 8, borderTop: '1px solid var(--border-light, #E5E7EB)' },
 }
 
-export default function ActionActivity({ workspaceId, actionId, pageSize = 20, slackMessageTS, slackChannelID, slackChannelURL, slackThreadTS, highlightCommentId }: ActionActivityProps) {
+export default function ActionActivity({ workspaceId, actionId, pageSize = 20, slackMessageTS, slackChannelID, slackChannelURL, slackThreadTS, highlightCommentId, readOnly = false }: ActionActivityProps) {
   // In a thread-mode case the action's Slack message is a reply in the case
   // thread, so the link names that thread to open the reply in place.
   const slackPermalink = buildSlackPermalink(slackChannelURL, slackChannelID, slackMessageTS, slackThreadTS)
@@ -428,7 +431,9 @@ export default function ActionActivity({ workspaceId, actionId, pageSize = 20, s
                   comment={it.data}
                   userIndex={userIndex}
                   t={t}
-                  isOwn={!!user && it.data.authorID === user.sub}
+                  // Edit / delete are offered only on the reader's own comment,
+                  // and never while the Action is read-only.
+                  isOwn={!readOnly && !!user && it.data.authorID === user.sub}
                   highlighted={it.data.id === highlightCommentId}
                   isEditing={editingId === it.data.id}
                   editingBody={editingBody}
@@ -527,9 +532,11 @@ export default function ActionActivity({ workspaceId, actionId, pageSize = 20, s
         </div>
       ) : null}
 
-      <div style={styles.composer}>
-        <ActionCommentComposer workspaceId={workspaceId} actionId={actionId} pageSize={commentLimit} />
-      </div>
+      {!readOnly && (
+        <div style={styles.composer}>
+          <ActionCommentComposer workspaceId={workspaceId} actionId={actionId} pageSize={commentLimit} />
+        </div>
+      )}
 
       {confirmDeleteId && (
         <Modal

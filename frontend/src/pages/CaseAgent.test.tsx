@@ -23,7 +23,7 @@ import CaseAgent from './CaseAgent'
 const WS = 'risk'
 const CASE_ID = 7
 
-const settingsMock = (): MockedResponse => ({
+const settingsMock = (archivedAt: string | null = null): MockedResponse => ({
   request: { query: GET_CASE_AGENT_SETTINGS, variables: { workspaceId: WS, caseId: CASE_ID } },
   maxUsageCount: Number.POSITIVE_INFINITY,
   result: {
@@ -35,6 +35,7 @@ const settingsMock = (): MockedResponse => ({
         status: 'OPEN',
         isPrivate: false,
         accessDenied: false,
+        archivedAt,
         slackChannelID: null,
         slackChannelURL: null,
         agentAdditionalPrompt: '',
@@ -244,5 +245,26 @@ describe('CaseAgent run-log polling', () => {
       await vi.advanceTimersByTimeAsync(RUN_POLL_INTERVAL_MS * 4)
     })
     expect(counter.runLogFetches).toBe(afterDeadline)
+  })
+})
+
+describe('CaseAgent settings on an archived case', () => {
+  it('offers the prompt Edit button on an active case', async () => {
+    renderPage([settingsMock(), jobsMock(), runLogsMock([])])
+
+    expect(await screen.findByTestId('agent-prompt-edit-button')).toBeInTheDocument()
+    expect(screen.queryByTestId('agent-settings-read-only-notice')).toBeNull()
+  })
+
+  it('hides both Edit buttons and says why on an archived case', async () => {
+    renderPage([settingsMock('2026-06-02T00:00:00Z'), jobsMock(), runLogsMock([])])
+
+    expect(await screen.findByTestId('agent-settings-read-only-notice')).toHaveTextContent(
+      'agent settings cannot be edited',
+    )
+    expect(screen.queryByTestId('agent-prompt-edit-button')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull()
+    // The current settings are still shown.
+    expect(screen.getByTestId('agent-prompt-display')).toBeInTheDocument()
   })
 })

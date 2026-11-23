@@ -55,6 +55,7 @@ import {
   IconRobot,
   IconX,
   IconFlask,
+  IconWarn,
 } from '../components/Icons'
 import { Avatar, PrivateBadge, TestBadge, StatusBadge } from '../components/Primitives'
 import CaseDeleteDialog from './CaseDeleteDialog'
@@ -234,6 +235,10 @@ export default function CaseDetail() {
   // There is no derived `archived` boolean on the wire; a case is archived
   // when archivedAt is non-null.
   const isArchived = !!c?.archivedAt
+  // An archived case is read-only, and so is everything under it: the server
+  // rejects every content write (fields, assignees, Actions, Memos), so the
+  // page offers none. Archive / Unarchive and Delete stay in the ⋯ menu.
+  const readOnly = isArchived
   const isThreadBound = !!c?.isThreadBound
   const slackThreadTS: string = c?.slackThreadTS || ''
   const slackLink = buildSlackCaseLink(slackChannelURL, slackChannelID, slackThreadTS)
@@ -298,6 +303,7 @@ export default function CaseDetail() {
   const [archiveCase, { loading: archivingCase }] = useMutation(ARCHIVE_CASE, { refetchQueries: refetchOptions })
   const [unarchiveCase, { loading: unarchivingCase }] = useMutation(UNARCHIVE_CASE, { refetchQueries: refetchOptions })
   const [assignCase] = useMutation(ASSIGN_CASE, { refetchQueries: refetchOptions })
+  const editDisabled = updating || readOnly
   const [unassignCase] = useMutation(UNASSIGN_CASE, { refetchQueries: refetchOptions })
   const [updateCaseStatus] = useMutation(UPDATE_CASE_STATUS, { refetchQueries: refetchOptions })
   const [deleteCase, { loading: deleting }] = useMutation(DELETE_CASE, {
@@ -581,7 +587,7 @@ export default function CaseDetail() {
                 ariaLabel={t('labelTitle')}
                 variant="title"
                 placeholder={t('placeholderAddTitle')}
-                disabled={updating}
+                disabled={editDisabled}
                 testId="case-title"
               />
             </h1>
@@ -617,7 +623,7 @@ export default function CaseDetail() {
               <input
                 type="checkbox"
                 checked={isTest}
-                disabled={updating}
+                disabled={editDisabled}
                 onChange={(e) => { void handleTestChange(e.target.checked) }}
                 data-testid="test-case-toggle"
               />
@@ -625,6 +631,15 @@ export default function CaseDetail() {
               {t('badgeTest')}
             </label>
           </div>
+
+          {readOnly && (
+            <div className="h-banner warn" data-testid="case-read-only-notice">
+              <IconWarn size={13} sw={2} />
+              <span className="h-banner-text">
+                {t('caseArchivedReadOnlyNotice', { caseLabel })}
+              </span>
+            </div>
+          )}
 
           {/* private banner — only relevant once the case is linked to a Slack
               channel; drafts have no channel yet and would render an empty
@@ -660,7 +675,7 @@ export default function CaseDetail() {
               onSave={handleDescriptionChange}
               ariaLabel={t('labelDescription')}
               placeholder={t('placeholderAddDescription')}
-              disabled={updating}
+              disabled={editDisabled}
               testId="case-description"
               renderMarkdown
             />
@@ -671,7 +686,7 @@ export default function CaseDetail() {
               key={f.id}
               field={f}
               value={c.fields?.find((x: any) => x.fieldId === f.id)?.value}
-              disabled={updating}
+              disabled={editDisabled}
               onSave={(v) => handleFieldChange(f.id, v)}
               testId={`case-field-${f.id}`}
             />
@@ -686,6 +701,7 @@ export default function CaseDetail() {
               caseId={caseId}
               workspaceId={currentWorkspace!.id}
               accessDenied={c.accessDenied}
+              readOnly={readOnly}
             />
           </section>
           )}
@@ -720,7 +736,7 @@ export default function CaseDetail() {
               >
                 {t('linkOpenInActionList')}
               </Button>
-              {actionView === 'open' && (
+              {actionView === 'open' && !readOnly && (
                 <Button
                   size="sm"
                   icon={<IconPlus size={12} />}
@@ -873,17 +889,21 @@ export default function CaseDetail() {
             {totalActions === 0 && (
               <div className="card" style={{ padding: 24, textAlign: 'center' }}>
                 <h3 style={{ fontSize: 14, margin: 0 }}>{t('emptyActionsTitle')}</h3>
-                <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>{t('emptyActionsDesc')}</p>
-                <div style={{ marginTop: 12 }}>
-                  <Button
-                    size="sm"
-                    icon={<IconPlus size={12} />}
-                    onClick={() => setAddingAction(true)}
-                    data-testid="empty-add-action-button"
-                  >
-                    {t('btnAddAction')}
-                  </Button>
-                </div>
+                {!readOnly && (
+                  <>
+                    <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>{t('emptyActionsDesc')}</p>
+                    <div style={{ marginTop: 12 }}>
+                      <Button
+                        size="sm"
+                        icon={<IconPlus size={12} />}
+                        onClick={() => setAddingAction(true)}
+                        data-testid="empty-add-action-button"
+                      >
+                        {t('btnAddAction')}
+                      </Button>
+                    </div>
+                  </>
+                )}
               </div>
             )}
           </section>
@@ -930,7 +950,7 @@ export default function CaseDetail() {
                     // An archived case takes no board writes: the server
                     // rejects them, so the control is disabled rather than
                     // left to fail silently. Unarchive it first.
-                    disabled={isArchived}
+                    disabled={readOnly}
                     onChange={(e) => { void handleBoardStatusChange(e.target.value) }}
                     style={{
                       border: '1px solid var(--border-default)',
@@ -1009,7 +1029,7 @@ export default function CaseDetail() {
               onSave={(ids) => handleAssigneesChange(ids as string[])}
               ariaLabel={t('sectionAssignees')}
               placeholder={t('placeholderAddAssignees')}
-              disabled={updating}
+              disabled={editDisabled}
               testId="case-assignees"
             />
           </section>
@@ -1048,7 +1068,7 @@ export default function CaseDetail() {
                       value={fv?.value}
                       display={fv?.display}
                       users={slackUsers}
-                      disabled={updating}
+                      disabled={editDisabled}
                       onSave={(v) => handleFieldChange(f.id, v)}
                       testId={`case-field-${f.id}`}
                     />
@@ -1099,7 +1119,7 @@ export default function CaseDetail() {
         </aside>
       </div>
 
-      {addingAction && (
+      {addingAction && !readOnly && (
         <ActionForm
           action={null}
           defaultCaseID={c.id}

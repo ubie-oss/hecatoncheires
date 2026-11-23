@@ -186,7 +186,7 @@ function usersMock(): MockedResponse {
   }
 }
 
-function renderActivity(mocks: MockedResponse[], highlightCommentId?: string) {
+function renderActivity(mocks: MockedResponse[], highlightCommentId?: string, readOnly = false) {
   return render(
     <MockedProvider mocks={mocks} addTypename={false}>
       <I18nProvider>
@@ -195,6 +195,7 @@ function renderActivity(mocks: MockedResponse[], highlightCommentId?: string) {
           actionId={ACTION_ID}
           pageSize={PAGE_SIZE}
           highlightCommentId={highlightCommentId}
+          readOnly={readOnly}
         />
       </I18nProvider>
     </MockedProvider>,
@@ -241,8 +242,21 @@ describe('ActionActivity comments', () => {
     await screen.findByTestId('activity-comment-c-mine')
     expect(screen.getByTestId('action-comment-edit-c-mine')).toBeInTheDocument()
     expect(screen.getByTestId('action-comment-delete-c-mine')).toBeInTheDocument()
+    expect(screen.getByTestId('action-comment-composer')).toBeInTheDocument()
     expect(screen.queryByTestId('action-comment-edit-c-theirs')).toBeNull()
     expect(screen.queryByTestId('action-comment-delete-c-theirs')).toBeNull()
+  })
+
+  it('offers no comment write control when read-only', async () => {
+    const mine = comment('c-mine', 'UME', 'my comment', '2026-08-20T03:00:00Z')
+    renderActivity([messagesMock(), eventsMock(), commentsMock(PAGE_SIZE, [mine]), usersMock()], undefined, true)
+
+    await screen.findByTestId('activity-comment-c-mine')
+    // The comment itself is still shown.
+    expect(screen.getByText('my comment')).toBeInTheDocument()
+    expect(screen.queryByTestId('action-comment-edit-c-mine')).toBeNull()
+    expect(screen.queryByTestId('action-comment-delete-c-mine')).toBeNull()
+    expect(screen.queryByTestId('action-comment-composer')).toBeNull()
   })
 
   it('marks an edited comment', async () => {

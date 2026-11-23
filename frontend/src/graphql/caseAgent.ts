@@ -12,6 +12,7 @@ export const GET_CASE_AGENT_SETTINGS = gql`
       status
       isPrivate
       accessDenied
+      archivedAt
       slackChannelID
       slackChannelURL
       agentAdditionalPrompt

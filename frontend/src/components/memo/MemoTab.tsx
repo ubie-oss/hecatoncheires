@@ -15,6 +15,9 @@ interface Props {
   caseId: number
   workspaceId: string
   accessDenied?: boolean
+  /** The parent Case is archived: memos are listed but none can be created
+   *  (the server rejects it), so the create buttons are not shown. */
+  readOnly?: boolean
 }
 
 interface MemoField {
@@ -334,7 +337,7 @@ function MemoRowItem({ memo, memoFields: _memoFields, summaryFields, colorField,
   )
 }
 
-export default function MemoTab({ caseId, workspaceId, accessDenied }: Props) {
+export default function MemoTab({ caseId, workspaceId, accessDenied, readOnly = false }: Props) {
   const { t } = useTranslation()
   const location = useLocation()
 
@@ -437,14 +440,16 @@ export default function MemoTab({ caseId, workspaceId, accessDenied }: Props) {
 
         <span style={{ flex: 1 }} />
 
-        <Button
-          size="sm"
-          icon={<IconPlus size={12} />}
-          onClick={() => setShowCreateForm(true)}
-          data-testid="new-memo-button"
-        >
-          {t('btnNewMemo')}
-        </Button>
+        {!readOnly && (
+          <Button
+            size="sm"
+            icon={<IconPlus size={12} />}
+            onClick={() => setShowCreateForm(true)}
+            data-testid="new-memo-button"
+          >
+            {t('btnNewMemo')}
+          </Button>
+        )}
       </div>
 
       {/* Loading skeleton */}
@@ -490,7 +495,7 @@ export default function MemoTab({ caseId, workspaceId, accessDenied }: Props) {
           <p style={{ margin: '0 0 var(--sp-4)', fontSize: 12, color: 'var(--fg-muted)' }}>
             {filterValue === 'ARCHIVED' ? t('memoEmptyArchivedDesc') : t('memoEmptyActiveDesc')}
           </p>
-          {filterValue !== 'ARCHIVED' && (
+          {filterValue !== 'ARCHIVED' && !readOnly && (
             <Button
               size="sm"
               icon={<IconPlus size={12} />}
@@ -523,7 +528,7 @@ export default function MemoTab({ caseId, workspaceId, accessDenied }: Props) {
       )}
 
       {/* Create form modal (editing happens on the memo detail page) */}
-      {showCreateForm && (
+      {showCreateForm && !readOnly && (
         <MemoFormModal
           workspaceId={workspaceId}
           caseId={caseId}

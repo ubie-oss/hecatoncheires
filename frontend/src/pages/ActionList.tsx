@@ -33,7 +33,7 @@ import styles from './ActionList.module.css'
 interface ActionRow {
   id: number
   caseID: number
-  case?: { id: number; title: string; accessDenied?: boolean; fields?: { fieldId: string; value: unknown }[] }
+  case?: { id: number; title: string; accessDenied?: boolean; archivedAt?: string | null; fields?: { fieldId: string; value: unknown }[] }
   title: string
   description: string
   assigneeID: string | null
@@ -191,6 +191,8 @@ export default function ActionList() {
     if (id == null) return
     const a = actions.find((x) => x.id === id)
     if (!a || a.status === target) return
+    // Actions of an archived case are read-only; the server would reject it.
+    if (a.case?.archivedAt) return
     try {
       await updateAction({
         variables: { workspaceId: currentWorkspace!.id, input: { id, status: target } },
@@ -361,7 +363,10 @@ export default function ActionList() {
                     tabIndex={0}
                     className="kan-card"
                     data-testid="action-card"
-                    draggable
+                    // An action of an archived case cannot change status, so
+                    // it is not offered as a drag source.
+                    draggable={!a.case?.archivedAt}
+                    data-read-only={a.case?.archivedAt ? 'true' : undefined}
                     onDragStart={(e) => {
                       setDraggingId(a.id)
                       e.dataTransfer.effectAllowed = 'move'
@@ -370,7 +375,7 @@ export default function ActionList() {
                     onDragEnd={() => { setDraggingId(null); setDragOverCol(null) }}
                     onClick={openModal}
                     onKeyDown={activateOnEnterOrSpace(openModal)}
-                    style={{ textAlign: 'left', opacity: draggingId === a.id ? 0.4 : 1, cursor: draggingId === a.id ? 'grabbing' : 'grab' }}
+                    style={{ textAlign: 'left', opacity: draggingId === a.id ? 0.4 : 1, cursor: a.case?.archivedAt ? 'pointer' : draggingId === a.id ? 'grabbing' : 'grab' }}
                   >
                     {a.case && (
                       <button

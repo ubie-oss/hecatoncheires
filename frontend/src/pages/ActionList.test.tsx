@@ -473,3 +473,40 @@ describe('ActionList in a thread-mode workspace', () => {
     })
   })
 })
+
+describe('ActionList cards of an archived case', () => {
+  it('does not offer a card of an archived case as a drag source', async () => {
+    const archivedCaseAction = {
+      ...actionRow(201, 9, 'Archived case', 'Frozen action'),
+      case: {
+        __typename: 'Case',
+        id: 9,
+        title: 'Archived case',
+        slackChannelID: null,
+        slackChannelURL: null,
+        archivedAt: '2026-05-02T00:00:00Z',
+      },
+    }
+    const actionsByCase9Mock: MockedResponse = {
+      request: { query: GET_ACTIONS_BY_CASE, variables: { workspaceId: 'risk', caseID: 9 } },
+      result: { data: { actionsByCase: [archivedCaseAction] } },
+    }
+    renderAt('/ws/risk/actions/case/9', fieldConfigMock, [actionsByCase9Mock])
+
+    const card = await screen.findByTestId('action-card')
+    expect(card).toHaveTextContent('Frozen action')
+    expect(card).toHaveAttribute('draggable', 'false')
+    expect(card).toHaveAttribute('data-read-only', 'true')
+  })
+
+  it('keeps cards of an active case draggable', async () => {
+    renderAt('/ws/risk/actions/case/3')
+    await waitFor(() => {
+      expect(screen.getAllByTestId('action-card')).toHaveLength(2)
+    })
+    for (const card of screen.getAllByTestId('action-card')) {
+      expect(card).toHaveAttribute('draggable', 'true')
+      expect(card).not.toHaveAttribute('data-read-only')
+    }
+  })
+})

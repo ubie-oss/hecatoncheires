@@ -212,6 +212,34 @@ describe('CaseDetail archive controls', () => {
     expect(screen.queryByTestId('case-archive-menu-item')).toBeNull()
   })
 
+  it('renders an archived case read-only and says why', async () => {
+    renderDetail([getCaseMock('CLOSED', '2026-05-02T00:00:00Z'), ...supportingMocks()])
+    await screen.findByText('Suspicious login')
+
+    expect(screen.getByTestId('case-read-only-notice')).toHaveTextContent('is archived and cannot be edited')
+    // Every inline editor is disabled, so clicking it opens no input.
+    const title = screen.getByTestId('case-title')
+    expect(title).toHaveAttribute('aria-disabled', 'true')
+    fireEvent.click(title)
+    expect(screen.queryByTestId('case-title-input')).toBeNull()
+    expect(screen.getByTestId('case-description')).toHaveAttribute('aria-disabled', 'true')
+    expect(screen.getByTestId('test-case-toggle')).toBeDisabled()
+    // Nothing can be added under it.
+    expect(screen.queryByTestId('add-action-button')).toBeNull()
+    expect(screen.queryByTestId('empty-add-action-button')).toBeNull()
+  })
+
+  it('keeps a closed but active case editable', async () => {
+    renderDetail([getCaseMock('CLOSED', null), ...supportingMocks()])
+    await screen.findByText('Suspicious login')
+
+    expect(screen.queryByTestId('case-read-only-notice')).toBeNull()
+    expect(screen.getByTestId('case-title')).not.toHaveAttribute('aria-disabled')
+    expect(screen.getByTestId('case-description')).not.toHaveAttribute('aria-disabled')
+    expect(screen.getByTestId('test-case-toggle')).toBeEnabled()
+    expect(await screen.findByTestId('add-action-button')).toBeInTheDocument()
+  })
+
   it('calls archiveCase when Archive is chosen', async () => {
     let called = false
     const archiveMock: MockedResponse = {

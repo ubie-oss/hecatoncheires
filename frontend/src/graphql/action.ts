@@ -16,6 +16,7 @@ const ACTION_FIELDS = `
     slackChannelID
     slackChannelURL
     slackThreadTS
+    archivedAt
   }
   title
   description

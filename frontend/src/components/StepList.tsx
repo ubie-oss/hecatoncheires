@@ -24,6 +24,9 @@ interface Step {
 interface Props {
   workspaceId: string
   actionId: number
+  /** Render the steps without any control that changes them (the Action or
+   *  its Case is archived, and the server rejects step writes). */
+  readOnly?: boolean
 }
 
 // 1:1 visual port of the design source under tmp/hecatoncheires
@@ -31,7 +34,7 @@ interface Props {
 // reproduced directly; the metadata that the WebUI deliberately hides
 // (createdBy / doneBy / timestamps) stays out of the row even though
 // GraphQL can deliver it.
-export default function StepList({ workspaceId, actionId }: Props) {
+export default function StepList({ workspaceId, actionId, readOnly = false }: Props) {
   const { t } = useTranslation()
   const refetchVars = { workspaceId, id: actionId }
 
@@ -109,12 +112,15 @@ export default function StepList({ workspaceId, actionId }: Props) {
             onDelete={() => handleDelete(step)}
             ariaCheckboxLabel={t('ariaActionStepCheckbox')}
             ariaDeleteLabel={t('ariaDeleteActionStep')}
+            readOnly={readOnly}
           />
         ))}
-        <AddStepRow
-          placeholder={t('placeholderAddActionStep')}
-          onSubmit={handleAdd}
-        />
+        {!readOnly && (
+          <AddStepRow
+            placeholder={t('placeholderAddActionStep')}
+            onSubmit={handleAdd}
+          />
+        )}
       </div>
     </div>
   )
@@ -127,9 +133,10 @@ interface StepRowProps {
   onDelete: () => Promise<void> | void
   ariaCheckboxLabel: string
   ariaDeleteLabel: string
+  readOnly?: boolean
 }
 
-export function StepRow({ step, onToggle, onRename, onDelete, ariaCheckboxLabel, ariaDeleteLabel }: StepRowProps) {
+export function StepRow({ step, onToggle, onRename, onDelete, ariaCheckboxLabel, ariaDeleteLabel, readOnly = false }: StepRowProps) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(step.title)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -171,6 +178,7 @@ export function StepRow({ step, onToggle, onRename, onDelete, ariaCheckboxLabel,
         aria-checked={step.done}
         aria-label={ariaCheckboxLabel}
         className={`${styles.checkbox} ${step.done ? styles.checkboxDone : ''}`}
+        disabled={readOnly}
         onClick={(e) => {
           e.stopPropagation()
           void onToggle()
@@ -183,7 +191,14 @@ export function StepRow({ step, onToggle, onRename, onDelete, ariaCheckboxLabel,
           </svg>
         )}
       </button>
-      {editing ? (
+      {readOnly ? (
+        <span
+          className={`${styles.title} ${styles.titleReadOnly} ${step.done ? styles.titleDone : ''}`}
+          data-testid={`action-step-title-${step.id}`}
+        >
+          {step.title}
+        </span>
+      ) : editing ? (
         <input
           ref={inputRef}
           className={styles.titleEdit}
@@ -210,6 +225,7 @@ export function StepRow({ step, onToggle, onRename, onDelete, ariaCheckboxLabel,
           {step.title}
         </button>
       )}
+      {!readOnly && (
       <button
         type="button"
         className={styles.deleteButton}
@@ -225,6 +241,7 @@ export function StepRow({ step, onToggle, onRename, onDelete, ariaCheckboxLabel,
           <line x1="6" y1="6" x2="18" y2="18" />
         </svg>
       </button>
+      )}
     </div>
   )
 }
