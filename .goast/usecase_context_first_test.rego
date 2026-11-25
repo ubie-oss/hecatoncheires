@@ -74,6 +74,16 @@ test_exempt_value_method if {
 	count(fail) == 0 with input as func_decl("Validate", [])
 }
 
+test_exempt_job_core_tool_builder if {
+	base := func_decl("CoreTools", [str_param])
+	job_builder := json.patch(base, [
+		{"op": "replace", "path": "/DirName", "value": "pkg/usecase/job"},
+		{"op": "replace", "path": "/FileName", "value": "runner.go"},
+	])
+	count(fail) == 0 with input as job_builder
+	count(fail) == 1 with input as base
+}
+
 # --- scoping ----------------------------------------------------------------
 
 test_test_file_ignored if {
