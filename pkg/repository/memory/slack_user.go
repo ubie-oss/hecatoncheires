@@ -57,6 +57,7 @@ func (r *slackUserRepository) GetByID(ctx context.Context, id model.SlackUserID)
 }
 
 func (r *slackUserRepository) FindByEmail(ctx context.Context, email string) (*model.SlackUser, error) {
+	email = model.NormalizeSlackEmail(email)
 	if email == "" {
 		return nil, nil
 	}
@@ -64,7 +65,7 @@ func (r *slackUserRepository) FindByEmail(ctx context.Context, email string) (*m
 	defer r.mu.RUnlock()
 	var match *model.SlackUser
 	for _, user := range r.users {
-		if user.Email != email {
+		if user.NormalizedEmail != email {
 			continue
 		}
 		if match != nil {
@@ -110,9 +111,43 @@ func (r *slackUserRepository) SaveMany(ctx context.Context, users []*model.Slack
 	for _, user := range users {
 		// Store a deep copy to prevent external modifications
 		userCopy := *user
+		userCopy.NormalizedEmail = model.NormalizeSlackEmail(userCopy.Email)
 		r.users[user.ID] = &userCopy
 	}
 
+	return nil
+}
+
+func (r *slackUserRepository) ReplaceAll(ctx context.Context, users []*model.SlackUser, startedAt time.Time) error {
+	replacement := make(map[model.SlackUserID]*model.SlackUser, len(users))
+	for _, user := range users {
+		if err := user.Validate(); err != nil {
+			return goerr.Wrap(err, "invalid Slack user in directory refresh")
+		}
+		copy := *user
+		copy.NormalizedEmail = model.NormalizeSlackEmail(copy.Email)
+		replacement[user.ID] = &copy
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !startedAt.After(r.metadata.LastRefreshSuccess) {
+		return nil
+	}
+	r.users = replacement
+	r.metadata.LastRefreshSuccess = startedAt
+	if startedAt.After(r.metadata.LastRefreshAttempt) {
+		r.metadata.LastRefreshAttempt = startedAt
+	}
+	r.metadata.UserCount = len(replacement)
+	return nil
+}
+
+func (r *slackUserRepository) RecordRefreshAttempt(ctx context.Context, startedAt time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if startedAt.After(r.metadata.LastRefreshAttempt) {
+		r.metadata.LastRefreshAttempt = startedAt
+	}
 	return nil
 }
 

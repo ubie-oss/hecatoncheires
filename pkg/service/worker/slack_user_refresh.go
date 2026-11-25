@@ -13,10 +13,7 @@ import (
 )
 
 // SlackUserRefreshWorker manages background refresh of Slack users from Slack API to database
-//
-// Architecture assumptions:
-// - Single server instance (no distributed locking)
-// - For future horizontal scaling, implement distributed locking or leader election
+
 type SlackUserRefreshWorker struct {
 	repo         interfaces.Repository
 	slackService slack.Service
@@ -91,25 +88,13 @@ func (w *SlackUserRefreshWorker) run(ctx context.Context) {
 	}
 }
 
-// refresh performs a single refresh cycle (Replace strategy: DeleteAll → SaveMany)
+// refresh fetches all members before publishing the replacement directory.
 func (w *SlackUserRefreshWorker) refresh(ctx context.Context) error {
 	startTime := time.Now()
 	logging.Default().Info("Starting Slack user refresh")
 
-	// Get existing metadata to preserve values on failure
-	existingMetadata, err := w.repo.SlackUser().GetMetadata(ctx)
-	if err != nil {
-		return goerr.Wrap(err, "failed to get existing metadata")
-	}
-
-	// Update metadata: attempt started
-	attemptMetadata := &model.SlackUserMetadata{
-		LastRefreshSuccess: existingMetadata.LastRefreshSuccess,
-		LastRefreshAttempt: startTime,
-		UserCount:          existingMetadata.UserCount,
-	}
-	if err := w.repo.SlackUser().SaveMetadata(ctx, attemptMetadata); err != nil {
-		return goerr.Wrap(err, "failed to save refresh attempt metadata")
+	if err := w.repo.SlackUser().RecordRefreshAttempt(ctx, startTime); err != nil {
+		return goerr.Wrap(err, "failed to record Slack user refresh")
 	}
 
 	// Fetch all users from Slack API
@@ -163,24 +148,8 @@ func (w *SlackUserRefreshWorker) refresh(ctx context.Context) error {
 		}
 	}
 
-	// Replace strategy: DeleteAll → SaveMany
-	// This prevents orphaned records and simplifies implementation
-	if err := w.repo.SlackUser().DeleteAll(ctx); err != nil {
-		return goerr.Wrap(err, "failed to delete existing Slack users")
-	}
-
-	if err := w.repo.SlackUser().SaveMany(ctx, users); err != nil {
-		return goerr.Wrap(err, "failed to save Slack users", goerr.V("count", len(users)))
-	}
-
-	// Update metadata: success
-	successMetadata := &model.SlackUserMetadata{
-		LastRefreshSuccess: startTime,
-		LastRefreshAttempt: startTime,
-		UserCount:          len(users),
-	}
-	if err := w.repo.SlackUser().SaveMetadata(ctx, successMetadata); err != nil {
-		return goerr.Wrap(err, "failed to save refresh success metadata")
+	if err := w.repo.SlackUser().ReplaceAll(ctx, users, startTime); err != nil {
+		return goerr.Wrap(err, "failed to publish Slack user directory", goerr.V("count", len(users)))
 	}
 
 	duration := time.Since(startTime)

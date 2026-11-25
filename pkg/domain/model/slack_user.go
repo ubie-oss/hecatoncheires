@@ -1,6 +1,7 @@
 package model
 
 import (
+	"strings"
 	"time"
 
 	"github.com/m-mizutani/goerr/v2"
@@ -14,12 +15,18 @@ type SlackUserID string
 
 // SlackUser represents a Slack workspace user stored in the database
 type SlackUser struct {
-	ID        SlackUserID
-	Name      string    // Slack username / handle (e.g., "john.doe")
-	RealName  string    // User-facing display name (Profile.DisplayName, with Profile.RealName / RealName as fallback). Field is named "RealName" for legacy reasons.
-	Email     string    // Email address (for future features)
-	ImageURL  string    // Avatar URL (empty string = no image)
-	UpdatedAt time.Time // Last synchronized from Slack
+	ID              SlackUserID
+	Name            string    // Slack username / handle (e.g., "john.doe")
+	RealName        string    // User-facing display name (Profile.DisplayName, with Profile.RealName / RealName as fallback). Field is named "RealName" for legacy reasons.
+	Email           string    // Email address as reported by Slack
+	NormalizedEmail string    // Indexed lookup value, derived by the repository on write
+	ImageURL        string    // Avatar URL (empty string = no image)
+	UpdatedAt       time.Time // Last synchronized from Slack
+}
+
+// NormalizeSlackEmail applies the same case folding to token and directory emails.
+func NormalizeSlackEmail(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
 }
 
 // Validate enforces the invariants required before any persistence write.

@@ -3,9 +3,11 @@ package repository_test
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/m-mizutani/gt"
 	"github.com/m-mizutani/hecatoncheires/pkg/domain/interfaces"
 	"github.com/m-mizutani/hecatoncheires/pkg/domain/model"
@@ -15,25 +17,77 @@ import (
 func runSlackUserRepositoryTest(t *testing.T, newRepo func(t *testing.T) interfaces.Repository) {
 	t.Helper()
 
-	t.Run("FindByEmail requires a unique exact match", func(t *testing.T) {
+	t.Run("FindByEmail requires a unique normalized match", func(t *testing.T) {
 		ctx := context.Background()
 		users := newRepo(t).SlackUser()
-		gt.NoError(t, users.DeleteAll(ctx)).Required()
-		email := "reader@example.com"
-		gt.NoError(t, users.SaveMany(ctx, []*model.SlackUser{{ID: "U123", Email: email}, {ID: "U456"}})).Required()
-		found, err := users.FindByEmail(ctx, email)
-		gt.NoError(t, err).Required()
-		gt.Value(t, found).NotNil().Required()
-		gt.Value(t, found.ID).Equal(model.SlackUserID("U123"))
-		for _, missing := range []string{"", "Reader@example.com", "unknown@example.com"} {
-			found, err = users.FindByEmail(ctx, missing)
+		id := model.SlackUserID(uuid.NewString())
+		email := "Reader-" + uuid.NewString() + "@example.com"
+		gt.NoError(t, users.SaveMany(ctx, []*model.SlackUser{{ID: id, Email: email}, {ID: model.SlackUserID(uuid.NewString())}})).Required()
+		for _, requested := range []string{email, strings.ToLower(email), " " + strings.ToUpper(email) + " "} {
+			found, err := users.FindByEmail(ctx, requested)
+			gt.NoError(t, err).Required()
+			gt.Value(t, found).NotNil().Required()
+			gt.Value(t, found.ID).Equal(id)
+			gt.String(t, found.Email).Equal(email)
+		}
+		for _, missing := range []string{"", "unknown-" + uuid.NewString() + "@example.com"} {
+			found, err := users.FindByEmail(ctx, missing)
 			gt.NoError(t, err).Required()
 			gt.Value(t, found).Nil()
 		}
-		gt.NoError(t, users.SaveMany(ctx, []*model.SlackUser{{ID: "U789", Email: email}})).Required()
-		found, err = users.FindByEmail(ctx, email)
+		gt.NoError(t, users.SaveMany(ctx, []*model.SlackUser{{ID: model.SlackUserID(uuid.NewString()), Email: strings.ToLower(email)}})).Required()
+		found, err := users.FindByEmail(ctx, email)
 		gt.NoError(t, err).Required()
 		gt.Value(t, found).Nil()
+	})
+
+	t.Run("ReplaceAll preserves the current directory on failure and supersedes older refreshes", func(t *testing.T) {
+		ctx := context.Background()
+		users := newRepo(t).SlackUser()
+		existing := &model.SlackUser{ID: model.SlackUserID(uuid.NewString()), Email: "Old@example.com"}
+		next := &model.SlackUser{ID: model.SlackUserID(uuid.NewString()), Email: "New@example.com"}
+		startedAt := time.Now().UTC().Truncate(time.Microsecond)
+		gt.NoError(t, users.ReplaceAll(ctx, []*model.SlackUser{existing}, startedAt)).Required()
+		gt.NoError(t, users.RecordRefreshAttempt(ctx, startedAt.Add(3*time.Second))).Required()
+		gt.Error(t, users.ReplaceAll(ctx, []*model.SlackUser{next, {}}, startedAt.Add(time.Second))).Is(model.ErrSlackUserValidation)
+		found, err := users.FindByEmail(ctx, "old@example.com")
+		gt.NoError(t, err).Required()
+		gt.Value(t, found).NotNil().Required()
+		gt.Value(t, found.ID).Equal(existing.ID)
+		found, err = users.FindByEmail(ctx, "new@example.com")
+		gt.NoError(t, err).Required()
+		gt.Value(t, found).Nil()
+
+		gt.NoError(t, users.ReplaceAll(ctx, []*model.SlackUser{next}, startedAt.Add(2*time.Second))).Required()
+		gt.NoError(t, users.ReplaceAll(ctx, []*model.SlackUser{existing}, startedAt.Add(time.Second))).Required()
+		found, err = users.FindByEmail(ctx, "old@example.com")
+		gt.NoError(t, err).Required()
+		gt.Value(t, found).Nil()
+		found, err = users.FindByEmail(ctx, "new@example.com")
+		gt.NoError(t, err).Required()
+		gt.Value(t, found).NotNil().Required()
+		gt.Value(t, found.ID).Equal(next.ID)
+		byID, err := users.GetByIDs(ctx, []model.SlackUserID{existing.ID, next.ID, next.ID})
+		gt.NoError(t, err).Required()
+		gt.Value(t, len(byID)).Equal(1)
+		gt.Value(t, byID[next.ID]).NotNil()
+		one, err := users.GetByID(ctx, next.ID)
+		gt.NoError(t, err).Required()
+		gt.Value(t, one.ID).Equal(next.ID)
+		metadata, err := users.GetMetadata(ctx)
+		gt.NoError(t, err).Required()
+		gt.Value(t, metadata.LastRefreshSuccess.Equal(startedAt.Add(2*time.Second))).Equal(true)
+		gt.Value(t, metadata.LastRefreshAttempt.Equal(startedAt.Add(3*time.Second))).Equal(true)
+		gt.Value(t, metadata.UserCount).Equal(1)
+		duplicate := &model.SlackUser{ID: model.SlackUserID(uuid.NewString()), Email: "NEW@example.com"}
+		gt.NoError(t, users.ReplaceAll(ctx, []*model.SlackUser{next, duplicate}, startedAt.Add(4*time.Second))).Required()
+		found, err = users.FindByEmail(ctx, "new@example.com")
+		gt.NoError(t, err).Required()
+		gt.Value(t, found).Nil()
+		gt.NoError(t, users.ReplaceAll(ctx, nil, startedAt.Add(5*time.Second))).Required()
+		all, err := users.GetAll(ctx)
+		gt.NoError(t, err).Required()
+		gt.Array(t, all).Length(0)
 	})
 
 	t.Run("SaveMany rejects the whole batch when any user lacks an ID", func(t *testing.T) {
