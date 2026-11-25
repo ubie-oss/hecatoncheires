@@ -31,8 +31,7 @@ const maxDatasetIDLength = 1024
 // GlobalConfig represents a deployment-wide configuration file supplied via
 // --global-config. It is distinct from the per-workspace files under --config
 // (which stay "1 file = 1 workspace"): a global config file carries settings
-// that span workspaces. Today it holds workspace group definitions only; new
-// deployment-wide sections can be added here later without a new flag.
+// that span workspaces, such as workspace groups and MCP authentication.
 type GlobalConfig struct {
 	// Workspace captures a stray [workspace] section so the loader can reject
 	// it. Workspace definitions belong under --config, never here. It is a raw
@@ -43,6 +42,7 @@ type GlobalConfig struct {
 	Export          *ExportSection          `toml:"export"`
 	Agent           *AgentSection           `toml:"agent"`
 	LLMModels       []LLMModelSection       `toml:"llm_model"`
+	MCP             *MCPIdentitySection     `toml:"mcp"`
 }
 
 // WorkspaceGroupSection represents a single [[workspace_group]] table.

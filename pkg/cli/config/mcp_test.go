@@ -21,7 +21,7 @@ func runMCPConfigure(t *testing.T, args []string) (*config.MCP, interfaces.Polic
 	var cfgErr error
 	cmd := &cli.Command{
 		Name:  "test",
-		Flags: m.Flags(),
+		Flags: append(m.Flags(), (&config.AppConfig{}).GlobalConfigFlags()...),
 		Action: func(_ context.Context, c *cli.Command) error {
 			pc, env, cfgErr = m.Configure(c)
 			return nil
@@ -50,6 +50,45 @@ func TestMCP_EnabledWithPolicyBuildsClient(t *testing.T) {
 	gt.Bool(t, m.IsEnabled()).True()
 	gt.Value(t, pc).NotNil()
 	gt.Value(t, env).NotNil()
+}
+
+func TestMCP_VerifiedIdentityConfig(t *testing.T) {
+	path := writeGlobalConfig(t, "global.toml", `[mcp]
+identity_header = "x-user-assertion"
+google_audience = "example.apps.googleusercontent.com"
+`)
+	m, pc, _, err := runMCPConfigure(t, []string{"--mcp", "--global-config", path})
+	gt.NoError(t, err).Required()
+	gt.Value(t, pc).Nil()
+	gt.Value(t, m.Identity()).NotNil().Required()
+	gt.String(t, m.Identity().IdentityHeader).Equal("x-user-assertion")
+	gt.String(t, m.Identity().GoogleAudience).Equal("example.apps.googleusercontent.com")
+
+	_, pc, _, err = runMCPConfigure(t, []string{"--mcp", "--global-config", path, "--policy", "testdata/policy"})
+	gt.NoError(t, err).Required()
+	gt.Value(t, pc).NotNil()
+
+	other := writeGlobalConfig(t, "other.toml", `[mcp]
+identity_header = "Authorization"
+google_audience = "other.apps.googleusercontent.com"
+`)
+	_, _, _, err = runMCPConfigure(t, []string{"--mcp", "--global-config", path, "--global-config", other})
+	gt.Error(t, err).Is(config.ErrDuplicateMCPConfig)
+}
+
+func TestMCP_InvalidIdentityDoesNotFallBackToPolicy(t *testing.T) {
+	for name, contents := range map[string]string{
+		"empty section":    "[mcp]\n",
+		"missing audience": "[mcp]\nidentity_header = 'X-Identity'\n",
+		"invalid header":   "[mcp]\nidentity_header = 'Invalid Header'\ngoogle_audience = 'client-id'\n",
+		"padded audience":  "[mcp]\nidentity_header = 'X-Identity'\ngoogle_audience = ' client-id '\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := writeGlobalConfig(t, "global.toml", contents)
+			_, _, _, err := runMCPConfigure(t, []string{"--mcp", "--global-config", path, "--policy", "testdata/policy"})
+			gt.Error(t, err)
+		})
+	}
 }
 
 func TestMCP_EnvPassthroughSnapshot(t *testing.T) {

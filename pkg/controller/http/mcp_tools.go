@@ -17,7 +17,7 @@ import (
 // exposed via MCP, regardless of channel membership.
 func (h *mcpHandler) registerTools(s *mcp.Server) {
 	registerTool(s, h, toolListWorkspaces,
-		"List all workspaces with their configuration details (case mode, status sets, custom field schema).",
+		"List accessible workspaces with their configuration details (case mode, status sets, custom field schema).",
 		h.runListWorkspaces)
 	registerTool(s, h, toolListCases,
 		"List cases in a workspace. Private cases are never returned. Optionally filter by status (DRAFT, OPEN, CLOSED).",
@@ -67,8 +67,15 @@ type listWorkspacesOutput struct {
 	Workspaces []workspaceDetail `json:"workspaces"`
 }
 
-func (h *mcpHandler) runListWorkspaces(_ context.Context, _ listWorkspacesInput) (listWorkspacesOutput, error) {
+func (h *mcpHandler) runListWorkspaces(ctx context.Context, _ listWorkspacesInput) (listWorkspacesOutput, error) {
 	entries := h.registry.List()
+	if h.identity != nil {
+		filtered, err := h.identity.WorkspaceAccess.FilterAccessibleForCurrentUser(ctx, entries)
+		if err != nil {
+			return listWorkspacesOutput{}, goerr.Wrap(err, "failed to filter accessible MCP workspaces")
+		}
+		entries = filtered
+	}
 	out := listWorkspacesOutput{Workspaces: make([]workspaceDetail, 0, len(entries))}
 	for _, e := range entries {
 		wd := workspaceDetail{

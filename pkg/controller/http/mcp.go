@@ -3,6 +3,7 @@ package http
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/m-mizutani/goerr/v2"
@@ -46,11 +47,15 @@ type mcpHandler struct {
 	registry *model.WorkspaceRegistry
 	policy   interfaces.PolicyClient
 	env      map[string]string
+	identity *mcpIdentity
 }
 
+// MCPOption configures how the MCP handler authenticates requests.
+type MCPOption func(*mcpHandler)
+
 // NewMCPHandler builds the http.Handler that serves the MCP endpoint over
-// Streamable HTTP (mounted at /mcp by the Server). policy is mandatory: every
-// tool call is authorized against data.auth.mcp before any data is read.
+// Streamable HTTP (mounted at /mcp by the Server). It requires either verified
+// identity with workspace authorization or a Rego policy.
 //
 // The transport runs in Stateless mode so each HTTP request carries its own
 // authorization and the request context (populated by withMCPRequestContext)
@@ -62,19 +67,20 @@ func NewMCPHandler(
 	registry *model.WorkspaceRegistry,
 	policy interfaces.PolicyClient,
 	env map[string]string,
+	opts ...MCPOption,
 ) http.Handler {
-	// policy is the sole authorization gate for the MCP data surface; a nil
-	// client would make every tool call panic on h.policy.Query. Fail fast at
-	// construction instead, so a wiring mistake never ships an open endpoint.
-	if policy == nil {
-		panic("MCP handler requires a non-nil policy client")
-	}
 	h := &mcpHandler{
 		caseUC:   caseUC,
 		actionUC: actionUC,
 		registry: registry,
 		policy:   policy,
 		env:      env,
+	}
+	for _, opt := range opts {
+		opt(h)
+	}
+	if h.policy == nil && h.identity == nil {
+		panic("MCP handler requires verified identity or a policy client")
 	}
 
 	server := mcp.NewServer(&mcp.Implementation{Name: mcpServerName, Version: mcpServerVersion}, nil)
@@ -88,7 +94,14 @@ func NewMCPHandler(
 		},
 	)
 
-	return withMCPRequestContext(streamable)
+	var handler http.Handler = streamable
+	if h.policy != nil {
+		handler = withMCPRequestContext(handler)
+	}
+	if h.identity != nil {
+		handler = h.identity.authenticate(handler)
+	}
+	return handler
 }
 
 // withMCPRequestContext captures the transport-level request metadata
@@ -108,17 +121,32 @@ func withMCPRequestContext(next http.Handler) http.Handler {
 	})
 }
 
-// authorize evaluates the Rego policy for one tool call. On allow it returns a
-// context carrying the resolved Slack user (when the policy provided one) as
-// an auth token, so downstream private-case access control can identify the
-// caller. On deny — or on any policy evaluation error — it returns an error
-// that the SDK surfaces to the client as a tool error; no data is read.
+// authorize checks the current Slack user's workspace access and any MCP policy
+// before running a tool. Only policy-only deployments may select a policy user.
 func (h *mcpHandler) authorize(ctx context.Context, toolName, workspaceID string, args map[string]any) (context.Context, error) {
+	var slackUserID string
+	if h.identity != nil {
+		token, err := auth.TokenFromContext(ctx)
+		if err != nil {
+			return ctx, goerr.Wrap(ErrMCPAuthorizationDenied, "verified Slack identity required")
+		}
+		slackUserID = token.Sub
+		if workspaceID != "" {
+			if err := h.identity.WorkspaceAccess.Authorize(ctx, workspaceID, slackUserID); err != nil {
+				return ctx, goerr.Wrap(err, "MCP workspace access check failed")
+			}
+		}
+	}
+	if h.policy == nil {
+		return ctx, nil
+	}
+
 	input := authz.BuildInput(ctx, h.env, &authz.ToolCall{
 		Name:        toolName,
 		WorkspaceID: workspaceID,
 		Args:        args,
 	})
+	input.SlackUserID = slackUserID
 
 	var result authz.Result
 	if err := h.policy.Query(ctx, mcpPolicyQuery, input, &result); err != nil {
@@ -128,7 +156,7 @@ func (h *mcpHandler) authorize(ctx context.Context, toolName, workspaceID string
 		return ctx, goerr.Wrap(ErrMCPAuthorizationDenied, "MCP tool call denied by policy",
 			goerr.V("tool", toolName), goerr.V("workspace_id", workspaceID))
 	}
-	if result.User != "" {
+	if h.identity == nil && result.User != "" {
 		ctx = auth.ContextWithToken(ctx, &auth.Token{Sub: result.User})
 	}
 	return ctx, nil
@@ -136,38 +164,68 @@ func (h *mcpHandler) authorize(ctx context.Context, toolName, workspaceID string
 
 // registerTool wires one typed tool onto the server, wrapping its run function
 // with the shared authorization gate. Every data-returning tool goes through
-// here, so no tool can return data without first passing the Rego policy.
+// here, so no tool can return data without passing its authorization checks.
 func registerTool[In, Out any](s *mcp.Server, h *mcpHandler, name, description string, run func(context.Context, In) (Out, error)) {
 	mcp.AddTool(s, &mcp.Tool{Name: name, Description: description},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in In) (*mcp.CallToolResult, Out, error) {
 			var zero Out
-			args, workspaceID := toolArgs(in)
+			args, workspaceID, err := toolArgs(in)
+			if err != nil {
+				return nil, zero, err
+			}
 			authCtx, err := h.authorize(ctx, name, workspaceID, args)
 			if err != nil {
+				outcome := "error"
+				if errors.Is(err, ErrMCPAuthorizationDenied) || errors.Is(err, model.ErrWorkspaceAccessDenied) {
+					outcome = "denied"
+				}
+				h.auditToolCall(authCtx, name, workspaceID, outcome)
 				return nil, zero, err
 			}
 			out, err := run(authCtx, in)
 			if err != nil {
+				h.auditToolCall(authCtx, name, workspaceID, "error")
 				return nil, zero, err
 			}
+			h.auditToolCall(authCtx, name, workspaceID, "success")
 			return nil, out, nil
 		})
 }
 
+func (h *mcpHandler) auditToolCall(ctx context.Context, toolName, workspaceID, outcome string) {
+	if h.identity == nil {
+		return
+	}
+	token, err := auth.TokenFromContext(ctx)
+	if err != nil {
+		return
+	}
+	logging.From(ctx).Info("MCP tool call",
+		"slack_user_id", token.Sub,
+		"tool", toolName,
+		"workspace_id", workspaceID,
+		"outcome", outcome,
+	)
+}
+
 // toolArgs renders the typed tool input into a generic map for the policy and
-// extracts the workspace_id (empty for tools that take no workspace). The
-// round-trip cannot fail for the concrete input structs used here; on the
-// theoretical marshal error we degrade to empty args, which the default-deny
-// policy treats as an unauthorized call.
-func toolArgs(in any) (map[string]any, string) {
+// extracts the workspace_id (empty for tools that take no workspace). A failed
+// conversion aborts the call before authorization or tool execution.
+func toolArgs(in any) (map[string]any, string, error) {
 	raw, err := json.Marshal(in)
 	if err != nil {
-		return map[string]any{}, ""
+		return nil, "", goerr.Wrap(err, "encode MCP tool arguments")
 	}
 	args := map[string]any{}
 	if err := json.Unmarshal(raw, &args); err != nil {
-		return map[string]any{}, ""
+		return nil, "", goerr.Wrap(err, "decode MCP tool arguments")
 	}
-	workspaceID, _ := args["workspace_id"].(string)
-	return args, workspaceID
+	if value, exists := args["workspace_id"]; exists {
+		workspaceID, ok := value.(string)
+		if !ok || workspaceID == "" {
+			return nil, "", goerr.New("workspace_id must be a non-empty string")
+		}
+		return args, workspaceID, nil
+	}
+	return args, "", nil
 }

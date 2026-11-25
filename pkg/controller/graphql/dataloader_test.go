@@ -6,6 +6,7 @@ import (
 	"sort"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/m-mizutani/gt"
 	graphqlctrl "github.com/m-mizutani/hecatoncheires/pkg/controller/graphql"
@@ -167,6 +168,11 @@ type slackUserCallCounter struct {
 func (c *slackUserCallCounter) GetAll(ctx context.Context) ([]*model.SlackUser, error) {
 	return c.inner.GetAll(ctx)
 }
+
+func (c *slackUserCallCounter) FindByEmail(ctx context.Context, email string) (*model.SlackUser, error) {
+	return c.inner.FindByEmail(ctx, email)
+}
+
 func (c *slackUserCallCounter) GetByID(ctx context.Context, id model.SlackUserID) (*model.SlackUser, error) {
 	return c.inner.GetByID(ctx, id)
 }
@@ -176,6 +182,12 @@ func (c *slackUserCallCounter) GetByIDs(ctx context.Context, ids []model.SlackUs
 }
 func (c *slackUserCallCounter) SaveMany(ctx context.Context, users []*model.SlackUser) error {
 	return c.inner.SaveMany(ctx, users)
+}
+func (c *slackUserCallCounter) ReplaceAll(ctx context.Context, users []*model.SlackUser, startedAt time.Time) error {
+	return c.inner.ReplaceAll(ctx, users, startedAt)
+}
+func (c *slackUserCallCounter) RecordRefreshAttempt(ctx context.Context, startedAt time.Time) error {
+	return c.inner.RecordRefreshAttempt(ctx, startedAt)
 }
 func (c *slackUserCallCounter) DeleteAll(ctx context.Context) error {
 	return c.inner.DeleteAll(ctx)

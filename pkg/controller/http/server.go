@@ -211,8 +211,8 @@ func New(gqlHandler http.Handler, opts ...Options) (*Server, error) {
 		r.Post("/api/validate/db", s.dbCheckHandler.ServeHTTP)
 	}
 
-	// MCP endpoint (Streamable HTTP). The handler embeds its own Rego-based
-	// authorization, so no auth middleware is applied here. Must be registered
+	// MCP endpoint (Streamable HTTP). The handler embeds its own authentication
+	// and authorization, so no Web auth middleware is applied here. Must be registered
 	// before the catch-all SPA route.
 	if s.mcpHandler != nil {
 		r.Handle("/mcp", s.mcpHandler)

@@ -39,15 +39,15 @@ type ToolCall struct {
 // Authorization header inside Req.Header is redacted separately by the
 // logger's masq.WithFieldName("Authorization") rule.
 type Input struct {
-	Req  *HTTPRequest      `json:"req"`
-	Env  map[string]string `json:"env" masq:"secret"`
-	Tool *ToolCall         `json:"tool,omitempty"`
+	Req         *HTTPRequest      `json:"req"`
+	Env         map[string]string `json:"env" masq:"secret"`
+	Tool        *ToolCall         `json:"tool,omitempty"`
+	SlackUserID string            `json:"slack_user_id,omitempty"` // Populated after verified identity resolution.
 }
 
 // Result is the document the policy is expected to produce under
 // `data.auth.mcp`. Allow gates the call; User (optional) is the Slack user ID
-// the request acts as, injected downstream as an auth token so private-case
-// access control can resolve the caller's identity.
+// the request acts as in policy-only mode.
 type Result struct {
 	Allow bool   `json:"allow"`
 	User  string `json:"user,omitempty"`

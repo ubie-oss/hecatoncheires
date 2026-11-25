@@ -4,12 +4,61 @@ Hecatoncheires can expose a read-only [Model Context Protocol](https://modelcont
 (MCP) endpoint so that AI clients (Claude and other MCP-capable hosts) can read
 Workspaces, Cases, and Actions. The endpoint is served over **Streamable HTTP**
 on the same HTTP server as the GraphQL API and Slack webhooks, and every tool
-call is authenticated and authorized by a **Rego policy**.
+call is authorized using a verified Slack identity or a Rego policy.
 
 ## Enabling
 
-The MCP endpoint is disabled by default. Enable it with `--mcp`, and supply at
-least one Rego policy with `--policy`:
+The endpoint is disabled by default. For user access, configure `[mcp]` in a
+deployment-wide TOML file and enable the endpoint with `--mcp`:
+
+```toml
+[mcp]
+identity_header = "X-User-ID-Token"
+google_audience = "example.apps.googleusercontent.com"
+```
+
+```bash
+hecatoncheires serve --mcp --global-config ./global.toml
+```
+
+Set `google_audience` to the OAuth client ID used to issue ID tokens for the MCP
+service. The client must send the user's Google ID token on every request in
+`identity_header`, as a raw JWT or as `Bearer <JWT>`. Header names are
+case-insensitive. The server checks Google's signature, issuer, audience,
+expiration, and verified email. It accepts Gmail and Google Workspace email
+addresses that Google can vouch for. See [Google's ID token verification guide](https://developers.google.com/identity/gsi/web/guides/verify-google-id-token).
+
+The verified email must match one record in the synced Slack user directory
+after ignoring letter case and surrounding whitespace. Enable Slack user
+synchronization with the `users:read` and `users:read.email` scopes and keep
+the directory current. A missing or ambiguous match is denied. The Slack user
+then gets the same workspace access as in the Web UI. Workspace listings are
+filtered and all Case and Action tools check the target workspace before reading it.
+
+### Obtaining a user token
+
+Register a Google OAuth client for the MCP integration and set its client ID
+as `google_audience`. For a desktop client, use authorization code flow with
+PKCE and the `openid email` scopes. The client sends `id_token` from the token
+response. For background refresh, request offline access and use the OAuth
+refresh token to obtain a fresh `id_token` before the current token expires.
+If the response has no usable ID token, repeat sign-in. A client that only
+accepts static headers needs a helper that supplies a current token on each
+request. See [Google's desktop OAuth guide](https://developers.google.com/identity/protocols/oauth2/native-app)
+and [token response reference](https://developers.google.com/identity/openid-connect/reference#tokenresponse).
+
+For an organization-only service, use a Google OAuth consent screen whose
+user type is Internal. Slack guests can appear in the synced directory.
+Review each workspace's `[authz]` policy when deciding access for matched
+users. A workspace with no `[authz]` policy allows any matched user.
+
+Before switching traffic, confirm that Slack sync has published a directory.
+With a real client and a synced Slack account, verify sign-in and token
+renewal, confirm `hecaton_list_workspaces` shows the expected workspaces, and
+check that explicitly requesting a denied workspace fails.
+
+To retain policy-only access for existing integrations, omit `[mcp]` and
+supply at least one Rego policy with `--policy`:
 
 ```bash
 hecatoncheires serve \
@@ -18,15 +67,19 @@ hecatoncheires serve \
   --mcp-env MCP_TOKEN
 ```
 
+Setting `[mcp]` requires a user token on every request to that instance's
+`/mcp`, even if a Rego policy would allow the call. Migrate policy-only clients
+before the switch or keep policy-only and verified-identity clients on
+separately configured instances and routes.
+
 | Flag | Env var | Default | Description |
 |------|---------|---------|-------------|
 | `--mcp` | `HECATONCHEIRES_MCP` | `false` | Enable the `/mcp` endpoint |
-| `--policy` | `HECATONCHEIRES_POLICY` | - | Rego policy file(s) or directory(ies). Repeatable. **Required** when `--mcp` is set |
+| `--policy` | `HECATONCHEIRES_POLICY` | - | Rego policy file(s) or directory(ies). Repeatable. Required for policy-only access |
 | `--mcp-env` | `HECATONCHEIRES_MCP_ENV` | - | Names of environment variables exposed to the policy as `input.env` (allow-list). Repeatable |
 
-> **The endpoint never starts without a policy.** If `--mcp` is set but no
-> `--policy` is supplied, `serve` exits with an error instead of exposing an
-> unauthenticated data surface.
+When `--mcp` is set, `serve` requires a valid `[mcp]` section or `--policy`.
+An invalid `[mcp]` section fails startup even when a policy is supplied.
 
 The endpoint is mounted at `POST/GET /mcp`. Point your MCP client's
 Streamable HTTP transport at `https://your-host/mcp`.
@@ -38,7 +91,7 @@ a client that aggregates several MCP servers.
 
 | Tool | Input | Returns |
 |------|-------|---------|
-| `hecaton_list_workspaces` | _(none)_ | All workspaces with details: `id`, `name`, `description`, `emoji`, `color`, `case_mode`, `action_statuses`, `case_statuses`, `field_schema` (each field: `id`, `name`, `type`, and — when the field sets one — `semantic` plus `semantic_hint`, an English description of the expected value; when the field sets `validation.pattern`, `pattern` plus `pattern_hint`, which states that the whole value must match the pattern) |
+| `hecaton_list_workspaces` | _(none)_ | Accessible workspaces with details: `id`, `name`, `description`, `emoji`, `color`, `case_mode`, `action_statuses`, `case_statuses`, `field_schema` (each field: `id`, `name`, `type`, and — when the field sets one — `semantic` plus `semantic_hint`, an English description of the expected value; when the field sets `validation.pattern`, `pattern` plus `pattern_hint`, which states that the whole value must match the pattern) |
 | `hecaton_list_cases` | `workspace_id` (required), `status` (optional: `DRAFT`/`OPEN`/`CLOSED`) | Case summaries (`id`, `title`, `status`, `board_status`, `reporter_id`, `assignee_ids`, `created_at`, `updated_at`) |
 | `hecaton_get_cases` | `workspace_id` (required), `ids` (required, `[]int`) | Full case details (summary fields plus `description`, `slack_channel_id`, `slack_thread_ts`, `field_values`, `agent_source_ids`) |
 | `hecaton_list_actions` | `workspace_id` (required), `case_id` (optional), `include_archived` (optional `bool`) | Action details (`id`, `case_id`, `title`, `description`, `assignee_id`, `status`, `due_date`, `archived_at`, `slack_message_ts`, timestamps) |
@@ -70,15 +123,15 @@ with `archived_at` absent from the summary fields. Use the GraphQL
 
 ## Authorization (Rego)
 
-Every tool call is evaluated against the Rego entrypoint **`data.auth.mcp`**.
-The policy receives an `input` document and must return an object with an
-`allow` boolean and an optional `user` string.
+When `--policy` is supplied, tool calls must pass the Rego entrypoint
+**`data.auth.mcp`**. The policy receives an `input` document and must return an
+object with an `allow` boolean and an optional `user` string.
 
-This is the only authorization MCP applies. A workspace's `[authz]` policy
-(see [configuration.md § Authorization Section](./configuration.md#authorization-section-authz))
-is **not** evaluated for MCP requests, including for the `user` this policy
-acts as. To restrict an MCP client to certain workspaces, check
-`input.tool.workspace_id` in this policy.
+In verified identity mode, the MCP policy can further restrict calls that pass
+the workspace's [`[authz]` policy](./configuration.md#authorization-section-authz).
+In policy-only mode, `data.auth.mcp` determines access for the integration.
+Use `input.tool.workspace_id` to restrict workspace-scoped calls and gate
+`hecaton_list_workspaces` separately if the client should not list all workspaces.
 
 ### Policy input
 
@@ -104,6 +157,9 @@ acts as. To restrict an MCP client to certain workspaces, check
 - `tool` — the tool name, the target `workspace_id` (when the tool takes one),
   and the full argument map, so a policy can authorize per tool / workspace /
   argument.
+- `slack_user_id` — the caller's resolved Slack user ID in verified identity
+  mode. The configured identity header is removed from `req.header` before
+  evaluation.
 
 ### Policy output
 
@@ -113,11 +169,9 @@ acts as. To restrict an MCP client to certain workspaces, check
 
 - `allow` (boolean, required) — gates the call. When false, the tool returns an
   authorization error and no data is read.
-- `user` (string, optional) — the Slack user ID the request acts as. It is
-  injected downstream so private-case access control can resolve the caller's
-  identity. (Note: because private Cases are never exposed via MCP regardless
-  of membership, `user` does not grant access to private data; it is used for
-  auditing and any future write tools.)
+- `user` (string, optional) — the Slack user ID the request acts as in
+  policy-only mode. In verified identity mode, the authenticated Slack user
+  always remains the caller.
 
 ### Example policy
 
@@ -146,12 +200,24 @@ immediately rather than at the first request.
 
 ## Security notes
 
-- **Secrets in logs are redacted.** The `input.env` allow-list is tagged for
+- **Route `/mcp` explicitly.** When adding an MCP ingress to an existing
+  deployment, expose `/mcp` through that ingress and keep the existing network
+  controls for the Web UI and operational endpoints.
+- **Audit verified tool calls.** The `MCP tool call` log includes the Slack user
+  ID, tool name, workspace ID where applicable, and outcome. It excludes token
+  values, email addresses, and other tool arguments.
+- **Watch authentication dependencies.** A signing-key retrieval failure or
+  Slack directory read failure returns HTTP 503 and is logged. Missing or
+  invalid tokens return 401, and missing or ambiguous Slack matches return
+  403. Each successful Slack sync publishes a complete directory. A failed
+  refresh keeps the last published version available.
+
+- **Credentials are kept out of logs.** The identity header is consumed by
+  MCP authentication. The `input.env` allow-list is tagged for
   redaction and the `Authorization` header is redacted by the logger's masq
   configuration, so neither appears in logs even at debug level.
 - **Stateless transport.** The Streamable HTTP transport runs stateless: each
   request carries its own authorization and no cross-request session state is
   held in process memory, so the endpoint is safe behind a horizontally-scaled
   deployment.
-- **Deploy behind your own network controls** as appropriate; the Rego policy
-  is the authorization gate, not a network boundary.
+- **Use HTTPS** to protect credentials in transit.

@@ -188,8 +188,8 @@ func (uc *WorkspaceAccessUseCase) decisionsFor(ctx context.Context, slackUserID 
 		out[wsID] = res.Allow
 	}
 
-	// A missing record is expected while the Slack user sync is between its
-	// DeleteAll and SaveMany, so a decision made on the empty shape is not
+	// A record can be missing before Slack's first successful refresh or
+	// immediately after a user joins, so a decision made on the empty shape is not
 	// kept: caching it would lock the user out for a whole TTL.
 	if found {
 		uc.decisions.Add(slackUserID, out)
