@@ -59,6 +59,11 @@ export class MemoDetailPage extends BasePage {
     await this.waitForHidden(this.formSubmitButton);
   }
 
+  /** The notice shown on a memo whose case is archived. */
+  caseArchivedNotice(): Locator {
+    return this.page.getByTestId('memo-detail-case-archived-notice');
+  }
+
   async backToCase(): Promise<void> {
     await this.backLink.click();
   }

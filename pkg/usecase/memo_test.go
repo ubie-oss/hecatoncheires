@@ -3,6 +3,7 @@ package usecase_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/m-mizutani/gt"
 	"github.com/m-mizutani/hecatoncheires/pkg/domain/interfaces"
@@ -219,6 +220,74 @@ func TestMemoUseCase_UpdateMemo(t *testing.T) {
 		gt.Value(t, updated.FieldValues["body"].Value).Equal("new")
 		// memo_type was not in the patch but must be preserved (and still valid).
 		gt.Value(t, updated.FieldValues["memo_type"].Value).Equal("fact")
+	})
+}
+
+func TestMemoUseCase_ArchivedIsReadOnly(t *testing.T) {
+	ctx := auth.ContextWithToken(context.Background(), &auth.Token{Sub: "UCREATOR"})
+	fields := map[string]model.FieldValue{
+		"memo_type": {FieldID: "memo_type", Value: "fact"},
+		"body":      {FieldID: "body", Value: "old"},
+	}
+
+	t.Run("an archived memo cannot be edited until it is unarchived", func(t *testing.T) {
+		uc, repo := newMemoUC(t)
+		caseID := seedCase(t, repo, ctx, &model.Case{ReporterID: "UCREATOR", Title: "Case", AssigneeIDs: []string{}})
+		created, err := uc.CreateMemo(ctx, memoTestWorkspaceID, usecase.CreateMemoInput{CaseID: caseID, Title: "memo", FieldValues: fields})
+		gt.NoError(t, err).Required()
+		_, err = uc.ArchiveMemo(ctx, memoTestWorkspaceID, caseID, created.ID)
+		gt.NoError(t, err).Required()
+
+		newTitle := "memo edited"
+		in := usecase.UpdateMemoInput{
+			ID:          created.ID,
+			CaseID:      caseID,
+			Title:       &newTitle,
+			FieldValues: map[string]model.FieldValue{"body": {FieldID: "body", Value: "new"}},
+		}
+		_, err = uc.UpdateMemo(ctx, memoTestWorkspaceID, in)
+		gt.Error(t, err).Is(usecase.ErrMemoArchived)
+
+		stored, err := repo.Memo().Get(ctx, memoTestWorkspaceID, caseID, created.ID)
+		gt.NoError(t, err).Required()
+		gt.Bool(t, stored.IsArchived()).True()
+		gt.String(t, stored.Title).Equal("memo")
+		gt.Value(t, stored.FieldValues["body"].Value).Equal("old")
+
+		_, err = uc.UnarchiveMemo(ctx, memoTestWorkspaceID, caseID, created.ID)
+		gt.NoError(t, err).Required()
+		updated, err := uc.UpdateMemo(ctx, memoTestWorkspaceID, in)
+		gt.NoError(t, err).Required()
+		gt.String(t, updated.Title).Equal("memo edited")
+		gt.Value(t, updated.FieldValues["body"].Value).Equal("new")
+	})
+
+	t.Run("an archived case takes no new memo and no memo edit", func(t *testing.T) {
+		uc, repo := newMemoUC(t)
+		caseID := seedCase(t, repo, ctx, &model.Case{ReporterID: "UCREATOR", Title: "Case", AssigneeIDs: []string{}})
+		created, err := uc.CreateMemo(ctx, memoTestWorkspaceID, usecase.CreateMemoInput{CaseID: caseID, Title: "memo", FieldValues: fields})
+		gt.NoError(t, err).Required()
+
+		c, err := repo.Case().Get(ctx, memoTestWorkspaceID, caseID)
+		gt.NoError(t, err).Required()
+		archivedAt := time.Now().UTC()
+		c.Status = types.CaseStatusClosed
+		c.ArchivedAt = &archivedAt
+		_, err = repo.Case().Update(ctx, memoTestWorkspaceID, c)
+		gt.NoError(t, err).Required()
+
+		_, err = uc.CreateMemo(ctx, memoTestWorkspaceID, usecase.CreateMemoInput{CaseID: caseID, Title: "another", FieldValues: fields})
+		gt.Error(t, err).Is(usecase.ErrCaseArchived)
+
+		newTitle := "memo edited"
+		_, err = uc.UpdateMemo(ctx, memoTestWorkspaceID, usecase.UpdateMemoInput{ID: created.ID, CaseID: caseID, Title: &newTitle})
+		gt.Error(t, err).Is(usecase.ErrCaseArchived)
+
+		memos, err := repo.Memo().List(ctx, memoTestWorkspaceID, caseID, interfaces.MemoListOptions{ArchiveScope: interfaces.MemoArchiveScopeAll})
+		gt.NoError(t, err).Required()
+		gt.Array(t, memos).Length(1).Required()
+		gt.Value(t, memos[0].ID).Equal(created.ID)
+		gt.String(t, memos[0].Title).Equal("memo")
 	})
 }
 

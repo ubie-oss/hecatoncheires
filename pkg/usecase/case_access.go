@@ -88,3 +88,37 @@ func loadCaseForWrite(ctx context.Context, repo interfaces.Repository, workspace
 	}
 	return c, nil
 }
+
+// assertCaseNotArchived is the single gate rejecting a content write against an
+// archived Case. An archived Case is read-only, and so is everything recorded
+// on it (its Actions with their steps and comments, and its Memos): every such
+// write path funnels through here so a new one cannot miss the rule.
+// Archive / unarchive themselves are not content writes and do not call it.
+func assertCaseNotArchived(c *model.Case) error {
+	if c == nil {
+		return goerr.Wrap(ErrCaseNotFound, "case is nil")
+	}
+	if c.IsArchived() {
+		return goerr.Wrap(ErrCaseArchived, "archived case is read-only; unarchive it first",
+			goerr.V(CaseIDKey, c.ID))
+	}
+	return nil
+}
+
+// assertActionWritable rejects a content write against an Action that is
+// archived, or whose parent Case is archived. The Case is checked first so the
+// caller is pointed at the object that has to be unarchived before anything
+// under it can change.
+func assertActionWritable(a *model.Action, parent *model.Case) error {
+	if err := assertCaseNotArchived(parent); err != nil {
+		return err
+	}
+	if a == nil {
+		return goerr.Wrap(ErrActionNotFound, "action is nil")
+	}
+	if a.IsArchived() {
+		return goerr.Wrap(ErrActionArchived, "archived action is read-only; unarchive it first",
+			goerr.V(ActionIDKey, a.ID))
+	}
+	return nil
+}

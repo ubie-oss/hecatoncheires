@@ -235,6 +235,38 @@ export class ActionDetailPage extends BasePage {
       .isVisible();
   }
 
+  /** The notice a read-only (archived, or archived-case) action shows. */
+  readOnlyNotice(): Locator {
+    return this.page.getByTestId('action-read-only-notice');
+  }
+
+  /** The comment composer under the activity feed. */
+  commentComposer(): Locator {
+    return this.page.getByTestId('action-comment-composer');
+  }
+
+  /** Archive the action through its confirm dialog; the modal closes. */
+  async archive(): Promise<void> {
+    await this.page.getByTestId('action-archive-button').click();
+    const responsePromise = this.page.waitForResponse(
+      (resp) => resp.url().includes('/graphql') && resp.status() === 200
+    );
+    await this.page.getByTestId('action-archive-confirm-button').click();
+    await responsePromise;
+    await this.page.getByTestId('action-title').waitFor({ state: 'hidden', timeout: 5000 });
+  }
+
+  /** Restore the action through its confirm dialog; the modal closes. */
+  async unarchive(): Promise<void> {
+    await this.page.getByTestId('action-unarchive-button').click();
+    const responsePromise = this.page.waitForResponse(
+      (resp) => resp.url().includes('/graphql') && resp.status() === 200
+    );
+    await this.page.getByTestId('action-unarchive-confirm-button').click();
+    await responsePromise;
+    await this.page.getByTestId('action-title').waitFor({ state: 'hidden', timeout: 5000 });
+  }
+
   /**
    * Close the modal by clicking the close button
    */

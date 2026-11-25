@@ -368,6 +368,77 @@ func TestActionStepUseCase_Delete(t *testing.T) {
 	})
 }
 
+// TestActionStepUseCase_ArchivedIsReadOnly pins that no step can be added,
+// toggled, renamed or removed while its Action, or the Action's Case, is
+// archived, and that nothing is written or announced when that is refused.
+func TestActionStepUseCase_ArchivedIsReadOnly(t *testing.T) {
+	archiveAction := func(t *testing.T, f *stepTestFixture) {
+		t.Helper()
+		a, err := f.repo.Action().Get(context.Background(), testWorkspaceID, f.action.ID)
+		gt.NoError(t, err).Required()
+		now := time.Now().UTC()
+		a.ArchivedAt = &now
+		_, err = f.repo.Action().Update(context.Background(), testWorkspaceID, a)
+		gt.NoError(t, err).Required()
+	}
+	archiveCase := func(t *testing.T, f *stepTestFixture) {
+		t.Helper()
+		c, err := f.repo.Case().Get(context.Background(), testWorkspaceID, f.caseModel.ID)
+		gt.NoError(t, err).Required()
+		now := time.Now().UTC()
+		c.Status = types.CaseStatusClosed
+		c.ArchivedAt = &now
+		_, err = f.repo.Case().Update(context.Background(), testWorkspaceID, c)
+		gt.NoError(t, err).Required()
+	}
+
+	for name, tc := range map[string]struct {
+		archive func(t *testing.T, f *stepTestFixture)
+		wantErr error
+	}{
+		"archived action": {archiveAction, usecase.ErrActionArchived},
+		"archived case":   {archiveCase, usecase.ErrCaseArchived},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newStepTestFixture(t, nil, false)
+			step, err := f.stepUC.Add(f.ctx(), usecase.AddActionStepInput{
+				WorkspaceID: testWorkspaceID, ActionID: f.action.ID, Title: "collect logs",
+			})
+			gt.NoError(t, err).Required()
+			tc.archive(t, f)
+			f.slack.calls = nil
+
+			_, err = f.stepUC.Add(f.ctx(), usecase.AddActionStepInput{
+				WorkspaceID: testWorkspaceID, ActionID: f.action.ID, Title: "another step",
+			})
+			gt.Error(t, err).Is(tc.wantErr)
+
+			_, err = f.stepUC.SetDone(f.ctx(), usecase.SetActionStepDoneInput{
+				WorkspaceID: testWorkspaceID, ActionID: f.action.ID, StepID: step.ID, Done: true,
+			})
+			gt.Error(t, err).Is(tc.wantErr)
+
+			_, err = f.stepUC.Rename(f.ctx(), usecase.RenameActionStepInput{
+				WorkspaceID: testWorkspaceID, ActionID: f.action.ID, StepID: step.ID, Title: "renamed",
+			})
+			gt.Error(t, err).Is(tc.wantErr)
+
+			err = f.stepUC.Delete(f.ctx(), usecase.DeleteActionStepInput{
+				WorkspaceID: testWorkspaceID, ActionID: f.action.ID, StepID: step.ID,
+			})
+			gt.Error(t, err).Is(tc.wantErr)
+
+			steps, err := f.repo.ActionStep().List(context.Background(), testWorkspaceID, f.action.ID)
+			gt.NoError(t, err).Required()
+			gt.Array(t, steps).Length(1).Required()
+			gt.String(t, steps[0].ID).Equal(step.ID)
+			gt.String(t, steps[0].Title).Equal("collect logs")
+			gt.Bool(t, steps[0].IsDone()).False()
+			gt.Array(t, f.slack.calls).Length(0)
+		})
+	}
+}
+
 func TestActionStepUseCase_ListAndProgress(t *testing.T) {
 	t.Run("returns ordered list and progress counts", func(t *testing.T) {
 		f := newStepTestFixture(t, nil, false)

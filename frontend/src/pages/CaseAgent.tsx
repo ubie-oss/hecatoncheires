@@ -9,6 +9,7 @@ import {
   TRIGGER_CASE_JOB,
   UPDATE_CASE_AGENT_SETTINGS,
 } from '../graphql/caseAgent'
+import { GET_FIELD_CONFIGURATION } from '../graphql/fieldConfiguration'
 import { useTranslation } from '../i18n'
 import { runTriggerLabelKey } from '../utils/agentTrigger'
 import {
@@ -23,6 +24,7 @@ import {
   IconEdit,
   IconExt,
   IconRobot,
+  IconWarn,
 } from '../components/Icons'
 import Button from '../components/Button'
 import CaseJobList, { type CaseJob } from '../components/caseAgent/CaseJobList'
@@ -55,6 +57,7 @@ interface CaseAgentSettings {
   status: string
   isPrivate: boolean
   accessDenied: boolean
+  archivedAt?: string | null
   slackChannelID: string | null
   slackChannelURL: string | null
   agentAdditionalPrompt: string
@@ -113,6 +116,11 @@ export default function CaseAgent() {
     skip: !workspaceId || !caseId,
     fetchPolicy: 'cache-and-network',
   })
+  const { data: fieldConfigData } = useQuery(GET_FIELD_CONFIGURATION, {
+    variables: { workspaceId },
+    skip: !workspaceId,
+  })
+  const caseLabel: string = fieldConfigData?.fieldConfiguration?.labels?.case || 'Case'
 
   // Pagination is held in a stack of "after" cursors. Index 0 is the
   // head (after=null); each Next push appends the connection's
@@ -257,6 +265,10 @@ export default function CaseAgent() {
     )
   }
 
+  // An archived case's agent settings are read-only: the server rejects
+  // updateCaseAgentSettings, so neither Edit button is offered.
+  const settingsReadOnly = !!caseData.archivedAt
+
   const handleStartPromptEdit = () => {
     setDraftPrompt(caseData.agentAdditionalPrompt)
     setEditingPrompt(true)
@@ -381,6 +393,14 @@ export default function CaseAgent() {
 
       {/* Settings block — operator inputs that shape the next run. */}
       <div className={styles.settingsBlock}>
+        {settingsReadOnly && (
+          <div className="h-banner warn" data-testid="agent-settings-read-only-notice">
+            <IconWarn size={13} sw={2} />
+            <span className="h-banner-text">
+              {t('caseAgentArchivedReadOnlyNotice', { caseLabel })}
+            </span>
+          </div>
+        )}
         <div className={styles.sectionHead}>
           <span className={styles.sectionHeadTitle}>
             {t('caseAgentSectionSettings')}
@@ -398,7 +418,7 @@ export default function CaseAgent() {
             <span className={styles.promptCount}>
               {t('caseAgentPromptCharCount', { count: promptLength, limit: PROMPT_LIMIT })}
             </span>
-            {editingPrompt ? null : (
+            {editingPrompt || settingsReadOnly ? null : (
               <Button
                 size="sm"
                 className={styles.editBtn}
@@ -452,7 +472,7 @@ export default function CaseAgent() {
               {sources.length}
             </span>
             <span style={{ flex: 1 }} />
-            {editingSources ? null : (
+            {editingSources || settingsReadOnly ? null : (
               <Button
                 size="sm"
                 className={styles.editBtn}

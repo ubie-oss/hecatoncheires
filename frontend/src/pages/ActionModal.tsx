@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react'
 import { useNavigate, useSearchParams } from 'react-router'
 import { useMutation, useQuery } from '@apollo/client'
 import { GET_ACTION, UPDATE_ACTION, ARCHIVE_ACTION, UNARCHIVE_ACTION, GET_ACTIONS } from '../graphql/action'
+import { GET_FIELD_CONFIGURATION } from '../graphql/fieldConfiguration'
 import { useWorkspace } from '../contexts/workspace-context'
 import { useTranslation } from '../i18n'
 import { useActionStatuses } from '../hooks/useActionStatuses'
@@ -9,7 +10,7 @@ import { useAssigneeCandidates } from '../hooks/useAssigneeCandidates'
 import { actionStatusColor } from '../utils/actionStatusStyle'
 import Modal from '../components/Modal'
 import Button from '../components/Button'
-import { IconCheck } from '../components/Icons'
+import { IconCheck, IconWarn } from '../components/Icons'
 import InlineText from '../components/inline/InlineText'
 import InlineLongText from '../components/inline/InlineLongText'
 import InlineSelect, { type InlineSelectOption } from '../components/inline/InlineSelect'
@@ -57,6 +58,11 @@ export default function ActionModal({ actionId, onClose }: ActionModalProps) {
 
   const action = data?.action
   const [savedFlash, setSavedFlash] = useState(false)
+  const { data: configData } = useQuery(GET_FIELD_CONFIGURATION, {
+    variables: { workspaceId: currentWorkspace?.id },
+    skip: !currentWorkspace,
+  })
+  const caseLabel: string = configData?.fieldConfiguration?.labels?.case || 'Case'
 
   const { users } = useAssigneeCandidates(currentWorkspace?.id)
 
@@ -214,6 +220,11 @@ export default function ActionModal({ actionId, onClose }: ActionModalProps) {
     onClose()
   }
   const isArchived = !!action?.archived
+  // An archived Action, and every Action of an archived Case, is read-only:
+  // the server rejects field, step and comment writes, so none is offered.
+  // Archive / Unarchive of the Action itself stay available.
+  const caseArchived = !!action?.case?.archivedAt
+  const readOnly = isArchived || caseArchived
 
   const due = action ? formatDue(action.dueDate) : null
 
@@ -253,6 +264,16 @@ export default function ActionModal({ actionId, onClose }: ActionModalProps) {
         <div className="muted">{t('loading')}</div>
       ) : (
         <>
+          {readOnly && (
+            <div className="h-banner warn" data-testid="action-read-only-notice">
+              <IconWarn size={13} sw={2} />
+              <span className="h-banner-text">
+                {caseArchived
+                  ? t('actionCaseArchivedReadOnlyNotice', { caseLabel })
+                  : t('actionArchivedReadOnlyNotice')}
+              </span>
+            </div>
+          )}
           <div style={{ marginBottom: 'var(--sp-6)' }}>
             <InlineText
               value={action.title || ''}
@@ -260,6 +281,7 @@ export default function ActionModal({ actionId, onClose }: ActionModalProps) {
               ariaLabel={t('labelTitle')}
               variant="title"
               placeholder={t('placeholderAddTitle')}
+              disabled={readOnly}
               testId="action-title"
             />
           </div>
@@ -277,6 +299,7 @@ export default function ActionModal({ actionId, onClose }: ActionModalProps) {
                 onSave={handleStatusChange}
                 ariaLabel={t('labelStatus')}
                 placeholder={t('placeholderAddStatus')}
+                disabled={readOnly}
                 testId="action-status"
               />
               {/* a11y dropdown for assistive tech and existing e2e */}
@@ -284,6 +307,7 @@ export default function ActionModal({ actionId, onClose }: ActionModalProps) {
                 aria-hidden
                 tabIndex={-1}
                 data-testid="status-dropdown"
+                disabled={readOnly}
                 value={action.status}
                 onChange={(e) => handleStatusChange(e.target.value)}
                 style={{ position: 'absolute', width: 1, height: 1, opacity: 0, pointerEvents: 'none' }}
@@ -302,6 +326,7 @@ export default function ActionModal({ actionId, onClose }: ActionModalProps) {
                   onSave={handleAssigneeChange}
                   ariaLabel={t('labelAssignee')}
                   placeholder={t('placeholderSelectAssignee')}
+                  disabled={readOnly}
                   testId="action-assignee"
                 />
               </div>
@@ -314,6 +339,7 @@ export default function ActionModal({ actionId, onClose }: ActionModalProps) {
                   onSave={handleDueDateChange}
                   ariaLabel={t('labelDueDate')}
                   placeholder={t('placeholderAddValue')}
+                  disabled={readOnly}
                   testId="action-due-date"
                 />
               </div>
@@ -327,12 +353,13 @@ export default function ActionModal({ actionId, onClose }: ActionModalProps) {
               onSave={handleSaveDescription}
               ariaLabel={t('labelDescription')}
               placeholder={t('placeholderAddDescription')}
+              disabled={readOnly}
               testId="action-description"
             />
           </div>
 
           <div style={{ marginBottom: 'var(--sp-8)' }}>
-            <StepList workspaceId={currentWorkspace!.id} actionId={action.id} />
+            <StepList workspaceId={currentWorkspace!.id} actionId={action.id} readOnly={readOnly} />
           </div>
 
           <div style={{ marginTop: 'var(--sp-6)' }}>
@@ -344,6 +371,7 @@ export default function ActionModal({ actionId, onClose }: ActionModalProps) {
               slackChannelURL={action.case?.slackChannelURL}
               slackThreadTS={action.case?.slackThreadTS}
               highlightCommentId={highlightCommentId}
+              readOnly={readOnly}
             />
           </div>
         </>

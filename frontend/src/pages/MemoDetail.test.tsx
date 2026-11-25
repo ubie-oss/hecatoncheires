@@ -33,13 +33,25 @@ function memoData(overrides: Partial<Record<string, unknown>> = {}) {
   }
 }
 
-function memoMock(overrides: Partial<Record<string, unknown>> = {}): MockedResponse {
+function memoMock(
+  overrides: Partial<Record<string, unknown>> = {},
+  caseArchivedAt: string | null = null,
+): MockedResponse {
   return {
     request: {
       query: GET_MEMO,
       variables: { workspaceId: WS, caseID: CASE_ID, id: MEMO_ID },
     },
-    result: { data: { memo: memoData(overrides) } },
+    result: {
+      data: {
+        memo: {
+          // GET_MEMO also selects the parent case's archive state; the
+          // mutations do not, so it is added here rather than in memoData.
+          case: { __typename: 'Case', id: CASE_ID, workspaceId: WS, archivedAt: caseArchivedAt },
+          ...memoData(overrides),
+        },
+      },
+    },
   }
 }
 
@@ -179,6 +191,18 @@ describe('MemoDetail', () => {
     expect(screen.getByTestId('memo-detail-unarchive-button')).toBeInTheDocument()
     expect(screen.queryByTestId('memo-detail-edit-button')).not.toBeInTheDocument()
     expect(screen.queryByTestId('memo-detail-archive-button')).not.toBeInTheDocument()
+  })
+
+  it('hides Edit on a memo of an archived case and says why, keeping Archive', async () => {
+    renderAt(MEMO_PATH, [memoMock({}, '2026-07-15T00:00:00Z'), configMock()])
+
+    await screen.findByTestId('memo-detail-page')
+
+    expect(screen.queryByTestId('memo-detail-edit-button')).not.toBeInTheDocument()
+    expect(screen.getByTestId('memo-detail-archive-button')).toBeInTheDocument()
+    expect(screen.getByTestId('memo-detail-case-archived-notice')).toHaveTextContent(
+      'this memo belongs to is archived, so the memo cannot be edited.',
+    )
   })
 
   it('shows the load-error state with retry and a back-to-case link on a memo error', async () => {

@@ -13,6 +13,37 @@ const baseStep = {
 }
 
 describe('StepRow', () => {
+  it('renders read-only: no edit, no delete, and a disabled checkbox', () => {
+    const onToggle = vi.fn()
+    const onRename = vi.fn()
+    const onDelete = vi.fn()
+    render(
+      <StepRow
+        step={baseStep}
+        onToggle={onToggle}
+        onRename={onRename}
+        onDelete={onDelete}
+        ariaCheckboxLabel="check"
+        ariaDeleteLabel="delete"
+        readOnly
+      />,
+    )
+    const title = screen.getByTestId('action-step-title-step-1')
+    expect(title).toHaveTextContent('collect logs')
+    expect(title.tagName).toBe('SPAN')
+    fireEvent.click(title)
+    expect(screen.queryByTestId('action-step-edit-step-1')).toBeNull()
+
+    const checkbox = screen.getByTestId('action-step-checkbox-step-1')
+    expect(checkbox).toBeDisabled()
+    fireEvent.click(checkbox)
+    expect(onToggle).not.toHaveBeenCalled()
+
+    expect(screen.queryByTestId('action-step-delete-step-1')).toBeNull()
+    expect(onRename).not.toHaveBeenCalled()
+    expect(onDelete).not.toHaveBeenCalled()
+  })
+
   it('renders title in plain mode and toggles edit on click', async () => {
     render(
       <StepRow

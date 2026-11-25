@@ -285,6 +285,11 @@ func (uc *ActionCommentUseCase) loadActionForCommentWrite(ctx context.Context, w
 	if err := assertCaseWriteAccess(parentCase, actorID, checkAccess); err != nil {
 		return nil, nil, err
 	}
+	// Comments are recorded on the Action, so an archived Action (or one under
+	// an archived Case) takes no new comment, edit or delete.
+	if err := assertActionWritable(action, parentCase); err != nil {
+		return nil, nil, goerr.Wrap(err, "cannot mutate action comment", goerr.V(ActionIDKey, actionID))
+	}
 	return action, parentCase, nil
 }
 

@@ -157,6 +157,21 @@ export class CaseDetailPage extends BasePage {
     return this.page.getByTestId('case-archived-badge');
   }
 
+  /** The notice an archived (read-only) case shows above its body. */
+  readOnlyNotice(): Locator {
+    return this.page.getByTestId('case-read-only-notice');
+  }
+
+  /** The inline title editor's display frame (aria-disabled when read-only). */
+  titleFrame(): Locator {
+    return this.page.getByTestId('case-title');
+  }
+
+  /** A Related Actions row by its title. */
+  relatedActionByTitle(title: string): Locator {
+    return this.page.getByTestId('case-related-action').filter({ hasText: title });
+  }
+
   /**
    * Whether the kebab menu offers the given archive action. Leaves the menu
    * open, so callers that go on to click it can reuse it.

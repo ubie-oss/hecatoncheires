@@ -688,7 +688,9 @@ description = "Link to the primary source (log, dashboard, PR)."
 
 - **WebUI**: a "Memos" tab on the Case detail page lets users list, view,
   create, edit, and archive memos. Deletion is a soft delete (archive) and is
-  restorable.
+  restorable. An archived memo is read-only: editing it is rejected (GraphQL
+  code `CONFLICT`) until it is restored. A memo of an archived Case can be
+  neither created nor edited.
 - **Agents**: every agent running in a Case context is given memo tools
   (`memo__list_memos`, `memo__get_memo`, `memo__apply_memo_changes`), scoped to
   that Case. Create and update are validated against the memo field schema

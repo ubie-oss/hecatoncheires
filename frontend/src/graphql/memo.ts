@@ -29,6 +29,11 @@ export const GET_MEMO = gql`
   query GetMemo($workspaceId: String!, $caseID: Int!, $id: ID!) {
     memo(workspaceId: $workspaceId, caseID: $caseID, id: $id) {
       ${MEMO_FIELDS}
+      case {
+        id
+        workspaceId
+        archivedAt
+      }
     }
   }
 `

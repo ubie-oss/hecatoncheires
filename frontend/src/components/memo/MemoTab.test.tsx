@@ -83,7 +83,7 @@ function LocationProbe({ target }: { target: LocationProbeRef }) {
 }
 
 function renderTab(
-  props: { accessDenied?: boolean } = {},
+  props: { accessDenied?: boolean; readOnly?: boolean } = {},
   entry: { pathname: string; state?: unknown } = { pathname: `/ws/${WS}/cases/${CASE_ID}` },
   extraMocks: MockedResponse[] = [],
 ) {
@@ -92,7 +92,7 @@ function renderTab(
     <MemoryRouter initialEntries={[entry]}>
       <MockedProvider mocks={[configMock(), memosMock('ACTIVE'), ...extraMocks]}>
         <I18nProvider defaultLang="en">
-          <MemoTab caseId={CASE_ID} workspaceId={WS} accessDenied={props.accessDenied} />
+          <MemoTab caseId={CASE_ID} workspaceId={WS} accessDenied={props.accessDenied} readOnly={props.readOnly} />
           <LocationProbe target={probeRef} />
         </I18nProvider>
       </MockedProvider>
@@ -148,6 +148,18 @@ describe('MemoTab', () => {
     expect(archivedTab).toHaveAttribute('aria-selected', 'true')
     expect(screen.getByTestId('memo-filter-active')).toHaveAttribute('aria-selected', 'false')
     expect(await screen.findByText('Archived memo')).toBeInTheDocument()
+  })
+
+  it('offers New memo normally and hides it when read-only, still listing memos', async () => {
+    renderTab()
+    await screen.findAllByTestId('memo-row')
+    expect(screen.getByTestId('new-memo-button')).toBeInTheDocument()
+    cleanup()
+
+    renderTab({ readOnly: true })
+    const rows = await screen.findAllByTestId('memo-row')
+    expect(rows).toHaveLength(2)
+    expect(screen.queryByTestId('new-memo-button')).not.toBeInTheDocument()
   })
 
   it('renders nothing when access is denied', () => {

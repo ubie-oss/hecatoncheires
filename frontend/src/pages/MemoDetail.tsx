@@ -16,6 +16,7 @@ import {
   ARCHIVE_MEMO,
   UNARCHIVE_MEMO,
 } from '../graphql/memo'
+import { GET_FIELD_CONFIGURATION } from '../graphql/fieldConfiguration'
 
 interface MemoFieldValue {
   fieldId: string
@@ -29,6 +30,7 @@ interface MemoData {
   title: string
   fields: MemoFieldValue[]
   archivedAt?: string | null
+  case?: { id: number; archivedAt?: string | null } | null
   createdAt: string
   updatedAt: string
 }
@@ -82,6 +84,11 @@ export default function MemoDetail() {
     skip: !validParams,
   })
 
+  const { data: fieldConfigData } = useQuery(GET_FIELD_CONFIGURATION, {
+    variables: { workspaceId },
+    skip: !validParams,
+  })
+
   // No refetchQueries: both mutations return the full memo selection set
   // (including archivedAt), so the normalized cache updates this page in
   // place, and MemoTab's cache-and-network list query refreshes on remount.
@@ -118,6 +125,10 @@ export default function MemoDetail() {
   const memo: MemoData | null | undefined = data?.memo
   const memoFields = normalizeMemoFields(configData?.memoConfiguration?.fields)
   const isArchived = !!memo?.archivedAt
+  // A memo of an archived Case cannot be edited either (the server rejects
+  // it). Archiving / restoring the memo itself stays available.
+  const caseArchived = !!memo?.case?.archivedAt
+  const caseLabel: string = fieldConfigData?.fieldConfiguration?.labels?.case || 'Case'
   const caseUrl = `/ws/${workspaceId}/cases/${caseId}`
 
   const handleArchiveConfirm = async () => {
@@ -231,15 +242,17 @@ export default function MemoDetail() {
           </>
         ) : (
           <>
-            <Button
-              variant="primary"
-              size="sm"
-              icon={<IconEdit size={13} />}
-              onClick={() => setEditOpen(true)}
-              data-testid="memo-detail-edit-button"
-            >
-              {t('btnEdit')}
-            </Button>
+            {!caseArchived && (
+              <Button
+                variant="primary"
+                size="sm"
+                icon={<IconEdit size={13} />}
+                onClick={() => setEditOpen(true)}
+                data-testid="memo-detail-edit-button"
+              >
+                {t('btnEdit')}
+              </Button>
+            )}
             <Button
               variant="danger"
               size="sm"
@@ -278,6 +291,29 @@ export default function MemoDetail() {
         >
           <IconWarn size={14} style={{ color: 'var(--warn)', flexShrink: 0, marginTop: 1 }} />
           <span>{t('memoDetailArchivedNotice')}</span>
+        </div>
+      )}
+
+      {/* Archived parent case notice */}
+      {!isArchived && caseArchived && (
+        <div
+          data-testid="memo-detail-case-archived-notice"
+          style={{
+            display: 'flex',
+            gap: 'var(--sp-2)',
+            alignItems: 'flex-start',
+            background: 'var(--bg-sunken)',
+            border: '1px solid var(--border-light)',
+            borderRadius: '0.375rem',
+            padding: 'var(--sp-3) var(--sp-4)',
+            fontSize: 12,
+            color: 'var(--fg-muted)',
+            lineHeight: 1.6,
+            marginBottom: 'var(--sp-3)',
+          }}
+        >
+          <IconWarn size={14} style={{ color: 'var(--warn)', flexShrink: 0, marginTop: 1 }} />
+          <span>{t('memoDetailCaseArchivedNotice', { caseLabel })}</span>
         </div>
       )}
 
@@ -344,7 +380,7 @@ export default function MemoDetail() {
       )}
 
       {/* Edit form modal */}
-      {editOpen && (
+      {editOpen && !isArchived && !caseArchived && (
         <MemoFormModal
           workspaceId={workspaceId}
           caseId={caseId}
