@@ -208,3 +208,32 @@ func TestWorkspaceCaseMode(t *testing.T) {
 	gt.NoError(t, err)
 	gt.V(t, sc.Workspace.CaseMode).Equal(model.CaseModeThread)
 }
+
+func TestValidateJobSelection(t *testing.T) {
+	sc, err := scenario.Load(filepath.Join("testdata", "job_simple.toml"))
+	gt.NoError(t, err).Required()
+	opts := scenario.ValidateOptions{KnownWorkflows: jobKnownWorkflows}
+
+	followup := *sc.Workspace.Jobs[0]
+	followup.ID = "followup"
+	sc.Workspace.Jobs = append(sc.Workspace.Jobs, &followup)
+	sc.Job.ID = ""
+	sc.Job.IDs = []string{"followup", "triage_summary"}
+	gt.NoError(t, sc.Validate(opts))
+	gt.V(t, sc.Job.SelectedIDs()[0]).Equal("followup")
+
+	sc.Job.IDs = []string{"followup", "followup"}
+	gt.Error(t, sc.Validate(opts))
+	sc.Job.IDs = []string{"followup", "missing"}
+	gt.Error(t, sc.Validate(opts))
+	sc.Job.IDs = []string{"followup"}
+	sc.Job.ID = "triage_summary"
+	gt.Error(t, sc.Validate(opts))
+}
+
+func TestValidateInvalidReplayClock(t *testing.T) {
+	sc, err := scenario.Load(validPath())
+	gt.NoError(t, err).Required()
+	sc.Meta.Now = "2026-04-11"
+	gt.Error(t, sc.Validate(scenario.ValidateOptions{KnownWorkflows: knownWorkflows}))
+}

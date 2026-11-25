@@ -3,7 +3,6 @@ package driver
 import (
 	"context"
 	"strings"
-	"time"
 
 	"github.com/m-mizutani/goerr/v2"
 	"github.com/m-mizutani/hecatoncheires/pkg/domain/interfaces"
@@ -41,64 +40,85 @@ func (*JobExecution) Run(ctx context.Context, e *env.Env, sc *scenario.Scenario,
 		ctx = i18n.ContextWithLang(ctx, lang)
 	}
 	wsID := e.Entry.Workspace.ID
+	if sc.Job == nil {
+		return nil, goerr.New("job workflow requires [run_job] with id or ids")
+	}
 
 	target, err := resolveTargetCase(e.SeededCases, sc.Job.TargetCase)
 	if err != nil {
 		return nil, err
 	}
-	jobModel, err := resolveJob(e.Entry.Jobs, sc.Job.ID)
-	if err != nil {
-		return nil, err
-	}
-
-	ev := job.Event{
-		Domain:        model.JobEventDomainCase,
-		WorkspaceID:   wsID,
-		CaseID:        target.ID,
-		Timestamp:     time.Now().UTC(),
-		ActorUserID:   "U-EVAL",
-		CaseLifecycle: model.CaseLifecycleCreated,
-	}
-
-	logger.Info("eval: running job", "scenario", sc.Meta.ID, "job", jobModel.ID, "case_id", target.ID, "strategy", string(jobModel.Strategy))
-	runErr := e.JobRunner.Run(ctx, jobModel, ev)
-	async.Wait()
-
-	key := model.JobRunKey{WorkspaceID: wsID, CaseID: target.ID, JobID: jobModel.ID}
-	logs, err := e.Repo.JobRunLog().List(ctx, key, 0)
-	if err != nil {
-		return nil, goerr.Wrap(err, "list job run logs")
-	}
-	if len(logs) == 0 {
-		// No run record was created — the run failed before logging (e.g. a
-		// prepare-stage error). Surface that as a driver error. The case itself
-		// already exists (it was seeded), so this is about the missing run log,
-		// not a missing case.
-		if runErr != nil {
-			return nil, goerr.Wrap(runErr, "job run failed before producing a log")
+	jobIDs := sc.Job.SelectedIDs()
+	jobs := make([]*model.Job, 0, len(jobIDs))
+	for _, jobID := range jobIDs {
+		j, err := resolveJob(e.Entry.Jobs, jobID)
+		if err != nil {
+			return nil, err
 		}
-		return nil, goerr.New("job run produced no log records")
+		jobs = append(jobs, j)
 	}
-	// The run is a durable Process: Run returned once it was recorded and spawned,
-	// so its outcome, timeline and case writes land afterwards.
-	latest, err := e.AwaitJobRun(ctx, key)
-	if err != nil {
-		return nil, err
-	}
-
+	// Replay Jobs in scenario order against the same evolving case.
 	art := &evaltype.JobArtifact{
-		JobID: jobModel.ID,
-		Outcome: evaltype.JobOutcome{
-			Stage: string(latest.Stage),
-			Error: latest.Error,
-		},
+		JobID:               strings.Join(jobIDs, "+"),
+		StartingDescription: target.Description,
 	}
-	summary, toolCalls, err := readTimeline(ctx, e.Repo, key, latest.RunID)
-	if err != nil {
-		return nil, err
+	for i, seeded := range e.SeededCases {
+		if seeded.ID == target.ID {
+			for _, message := range sc.Cases[i].Thread {
+				art.StartingThread = append(art.StartingThread, message.User+": "+message.Text)
+			}
+			break
+		}
 	}
-	art.Outcome.Summary = summary
-	art.ToolCalls = toolCalls
+	eventTime := e.Now()
+	for _, jobModel := range jobs {
+		ev := job.Event{
+			Domain:        model.JobEventDomainCase,
+			WorkspaceID:   wsID,
+			CaseID:        target.ID,
+			Timestamp:     eventTime,
+			ActorUserID:   target.ReporterID,
+			CaseLifecycle: model.CaseLifecycleCreated,
+		}
+
+		logger.Info("eval: running job", "scenario", sc.Meta.ID, "job", jobModel.ID, "case_id", target.ID, "strategy", string(jobModel.Strategy))
+		runErr := e.JobRunner.Run(ctx, jobModel, ev)
+		async.Wait()
+
+		key := model.JobRunKey{WorkspaceID: wsID, CaseID: target.ID, JobID: jobModel.ID}
+		logs, err := e.Repo.JobRunLog().List(ctx, key, 0)
+		if err != nil {
+			return nil, goerr.Wrap(err, "list job run logs")
+		}
+		if len(logs) == 0 {
+			if runErr != nil {
+				return nil, goerr.Wrap(runErr, "job run failed before producing a log")
+			}
+			return nil, goerr.New("job run produced no log records")
+		}
+		latest, err := e.AwaitJobRun(ctx, key)
+		if err != nil {
+			return nil, err
+		}
+		summary, toolCalls, err := readTimeline(ctx, e.Repo, key, latest.RunID)
+		if err != nil {
+			return nil, err
+		}
+		prefix := ""
+		if len(jobIDs) > 1 {
+			prefix = "[" + jobModel.ID + "] "
+		}
+		art.Outcome.Stage = joinNonEmpty(art.Outcome.Stage, prefix+string(latest.Stage))
+		art.Outcome.Error = joinNonEmpty(art.Outcome.Error, prefixIf(prefix, latest.Error))
+		art.Outcome.Summary = joinNonEmpty(art.Outcome.Summary, prefixIf(prefix, summary))
+		for _, tc := range toolCalls {
+			tc.Seq = len(art.ToolCalls) + 1
+			if len(jobs) > 1 {
+				tc.Mode = jobModel.ID
+			}
+			art.ToolCalls = append(art.ToolCalls, tc)
+		}
+	}
 
 	c, err := e.Repo.Case().Get(ctx, wsID, target.ID)
 	if err != nil {
@@ -112,8 +132,27 @@ func (*JobExecution) Run(ctx context.Context, e *env.Env, sc *scenario.Scenario,
 	}
 	art.Actions = actions
 
-	logger.Info("eval: job done", "scenario", sc.Meta.ID, "job", jobModel.ID, "stage", art.Outcome.Stage, "actions", len(art.Actions))
+	art.Posts = e.Slack.Posts()
+
+	logger.Info("eval: job done", "scenario", sc.Meta.ID, "job", art.JobID, "stage", art.Outcome.Stage, "actions", len(art.Actions))
 	return art, nil
+}
+
+func joinNonEmpty(a, b string) string {
+	switch {
+	case b == "":
+		return a
+	case a == "":
+		return b
+	}
+	return a + "\n" + b
+}
+
+func prefixIf(prefix, s string) string {
+	if s == "" {
+		return ""
+	}
+	return prefix + s
 }
 
 func resolveTargetCase(seeded []*model.Case, title string) (*model.Case, error) {

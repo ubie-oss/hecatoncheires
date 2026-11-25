@@ -85,6 +85,11 @@ type Durable struct {
 	// the turn generated through.
 	models agentkernel.ModelPolicy
 
+	// clock is the wall clock a turn reads "now" from. nil means time.Now; the
+	// eval harness pins it so a scenario built from a past event is read against
+	// the day it happened.
+	clock func() time.Time
+
 	mention agentkit.Agent[planexec.Input]
 	create  agentkit.Agent[planexec.Input]
 	kernel  *agentkit.Kernel
@@ -92,6 +97,9 @@ type Durable struct {
 	// tool for this run. nil leaves the palette unfiltered.
 	probe *agentkernel.ToolSetProbe
 }
+
+// SetClock pins the wall clock turns read. Call it before starting any turns.
+func (d *Durable) SetClock(_ context.Context, clock func() time.Time) { d.clock = clock }
 
 // NewDurable builds the durable thread-mode host. The registry is required
 // because the create turn validates its proposed field values against the
@@ -295,6 +303,9 @@ func (d *Durable) input(ctx context.Context, req TurnRequest, scope agentkernel.
 	// message and every sub-agent from the task context, so the two cannot
 	// disagree about what "today" means inside one turn.
 	now := time.Now().UTC()
+	if d.clock != nil {
+		now = d.clock().UTC()
+	}
 	taskCtx := agent.TaskContext{
 		WorkspaceID:    req.Workspace.Workspace.ID,
 		SlackChannelID: req.ChannelID,

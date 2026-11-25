@@ -194,6 +194,14 @@ func (uc *AgentUseCase) RegisterAgents(
 	return nil
 }
 
+// SetThreadCaseClock pins the wall clock the thread-mode agents read. It is a
+// no-op until RegisterAgents has built them.
+func (uc *AgentUseCase) SetThreadCaseClock(ctx context.Context, clock func() time.Time) {
+	if uc.durableThreadcase != nil {
+		uc.durableThreadcase.SetClock(ctx, clock)
+	}
+}
+
 // BindAgentKernel hands the built Kernel to every agent RegisterAgents
 // registered. Until it is called, a mention turn cannot be spawned.
 //

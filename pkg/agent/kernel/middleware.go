@@ -18,6 +18,7 @@ import (
 	"github.com/m-mizutani/masq"
 
 	"github.com/m-mizutani/hecatoncheires/pkg/agent/agenttrace"
+	"github.com/m-mizutani/hecatoncheires/pkg/agent/harness"
 	"github.com/m-mizutani/hecatoncheires/pkg/agent/runtrace"
 	"github.com/m-mizutani/hecatoncheires/pkg/domain/model/auth"
 	"github.com/m-mizutani/hecatoncheires/pkg/i18n"
@@ -33,6 +34,10 @@ type traceHandlerKey struct{}
 func withTraceHandler(ctx context.Context, h trace.Handler) context.Context {
 	return context.WithValue(ctx, traceHandlerKey{}, h)
 }
+
+// runTimelineKey carries the claim's JobRunEvent sink on its own, beside the
+// combined handler traceHandlerKey holds.
+type runTimelineKey struct{}
 
 func traceHandlerFrom(ctx context.Context) trace.Handler {
 	h, _ := ctx.Value(traceHandlerKey{}).(trace.Handler)
@@ -91,6 +96,10 @@ func claimMiddleware(d Deps) agentkit.ClaimMiddleware {
 			handler := trace.Handler(recorder)
 			if timeline := runTimeline(d, proc, sc); timeline != nil {
 				handler = trace.Multi(recorder, timeline)
+				// Also reachable on its own: a harness-driven run asks it for a
+				// placeholder turn (see toolCallMiddleware), which the Multi wrapper
+				// has no way to pass through.
+				ctx = context.WithValue(ctx, runTimelineKey{}, timeline)
 			}
 			ctx = withTraceHandler(ctx, handler)
 
@@ -99,6 +108,9 @@ func claimMiddleware(d Deps) agentkit.ClaimMiddleware {
 			// StartAgentExecute, and a child span with no trace to hang off is
 			// dropped — so without this the archive of every run would be empty.
 			ctx = handler.StartAgentExecute(ctx)
+			if harness.FromContext(ctx) != nil {
+				ctx = trace.WithHandler(ctx, handler)
+			}
 			outcome, err := next(ctx, req)
 			handler.EndAgentExecute(ctx, err)
 
@@ -276,6 +288,13 @@ func toolCallMiddleware() agentkit.ToolCallMiddleware {
 			h := traceHandlerFrom(ctx)
 			if h == nil {
 				return next(ctx, req)
+			}
+			if harness.FromContext(ctx) != nil {
+				// The harness makes this run's model calls outside the process, so
+				// the timeline has no LLM response for the call to hang from.
+				if rt, ok := ctx.Value(runTimelineKey{}).(*runtrace.Handler); ok && rt != nil {
+					rt.EnsureExternalTurn(ctx, "This run's loop is driven by an external agent harness; its model calls are not recorded here.")
+				}
 			}
 			spanCtx := h.StartToolExec(ctx, req.Call.Name, req.Call.Arguments)
 			out, err := next(trace.WithHandler(spanCtx, h), req)

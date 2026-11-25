@@ -12,6 +12,7 @@ import (
 	"github.com/gollem-dev/gollem"
 	"github.com/m-mizutani/goerr/v2"
 
+	"github.com/m-mizutani/hecatoncheires/pkg/agent/harness"
 	agentkernel "github.com/m-mizutani/hecatoncheires/pkg/agent/kernel"
 	"github.com/m-mizutani/hecatoncheires/pkg/agent/react"
 	"github.com/m-mizutani/hecatoncheires/pkg/agent/toolargs"
@@ -276,7 +277,10 @@ type state struct {
 	RoundKey agentkit.AwaitKey `json:"round_key,omitempty"`
 	// Direct marks the current round as the direct fast path, whose single
 	// child's answer IS the turn's reply.
-	Direct   bool          `json:"direct,omitempty"`
+	Direct bool `json:"direct,omitempty"`
+	// Harness marks the current round's single child as a whole run handed to an
+	// external harness (see launchHarness), whose answer is the run's output.
+	Harness  bool          `json:"harness,omitempty"`
 	Progress progressState `json:"progress,omitempty"`
 	// FinalRetries counts terminal outputs rejected by decode / Validate /
 	// finalizers.
@@ -496,6 +500,11 @@ func (s *strategy[T]) Step(ctx context.Context, sys agentkit.Syscalls, st state)
 
 // stepPlan makes the opening planner call and launches the first round.
 func (s *strategy[T]) stepPlan(ctx context.Context, sys agentkit.Syscalls, st state) (state, agentkit.Decision[Output[T]], error) {
+	// An installed harness runs the whole turn as one agent; nothing is planned.
+	if harness.FromContext(ctx) != nil {
+		return s.launchHarness(ctx, sys, st)
+	}
+
 	if st.Reserve {
 		// Nothing has been investigated, but the budget is already nearly gone.
 		// Answering from an empty trail beats spending the remainder on a plan
@@ -739,6 +748,10 @@ func (s *strategy[T]) stepCollect(ctx context.Context, sys agentkit.Syscalls, st
 			goerr.V("key", string(st.RoundKey)), goerr.V("status", string(aw.Status)))
 	}
 
+	if st.Harness {
+		return s.collectHarness(ctx, sys, st, aw.Results)
+	}
+
 	if st.Direct {
 		// The direct path's single child IS the answer, so its text is read straight
 		// off the child rather than through collectResults: that path truncates at
@@ -830,17 +843,7 @@ func (s *strategy[T]) stepReplan(ctx context.Context, sys agentkit.Syscalls, st 
 	st.PlannerToolRounds = 0
 	switch {
 	case rr.Question != nil:
-		st = s.note(ctx, st, "❓ Asked a question")
-		if st.Input.SuspendOnQuestion {
-			return s.askAndWait(ctx, sys, st, rr.Question)
-		}
-		// The turn ENDS on a question rather than waiting on an await. Holding the
-		// run open while a person takes minutes or hours would pin its subject and
-		// block every later turn on the thread; the answer arrives as a fresh run
-		// that inherits this one's history.
-		return st, agentkit.Done(Output[T]{
-			Kind: OutputQuestion, Question: rr.Question, Observations: st.Observations,
-		}), nil
+		return s.handleQuestion(ctx, sys, st, rr.Question)
 	case rr.Finalize != nil:
 		st.Phase = phaseFinal
 		return st, agentkit.Continue[Output[T]](), nil
@@ -848,6 +851,16 @@ func (s *strategy[T]) stepReplan(ctx context.Context, sys agentkit.Syscalls, st 
 		st.Round++
 		return s.launchRound(ctx, sys, st, rr.Tasks)
 	}
+}
+
+func (s *strategy[T]) handleQuestion(ctx context.Context, sys agentkit.Syscalls, st state, q *Question) (state, agentkit.Decision[Output[T]], error) {
+	st = s.note(ctx, st, "❓ Asked a question")
+	if st.Input.SuspendOnQuestion {
+		return s.askAndWait(ctx, sys, st, q)
+	}
+	// Release the subject while the user answers. The host starts a new turn
+	// with the conversation once the answer arrives.
+	return st, agentkit.Done(Output[T]{Kind: OutputQuestion, Question: q, Observations: st.Observations}), nil
 }
 
 // RenderAnswers turns a human's answers into the user turn a suspended run
@@ -938,8 +951,16 @@ func (s *strategy[T]) stepAnswer(ctx context.Context, sys agentkit.Syscalls, st 
 	}
 	st = s.note(ctx, st, "💬 Received the answer")
 	st.AnswerKey = ""
-	st.NextInput = answer
 	st.Round++
+	if st.Harness {
+		if st.NextInput == "" {
+			st.NextInput = st.Input.UserInput
+		}
+		st.NextInput += "\n\n" + answer
+		st.FinalRetries = 0
+		return s.launchHarness(ctx, sys, st)
+	}
+	st.NextInput = answer
 	st.Phase = phaseReplan
 	return st, agentkit.Continue[Output[T]](), nil
 }

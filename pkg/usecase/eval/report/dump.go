@@ -25,6 +25,7 @@ type runDump struct {
 	Transcript       []evaltype.TurnRecord     `json:"transcript,omitempty"`
 	ToolCalls        []evaltype.ToolCallRecord `json:"tool_calls,omitempty"`
 	Case             any                       `json:"case,omitempty"`
+	Posts            []evaltype.SlackPost      `json:"posts,omitempty"`
 }
 
 // Dump writes the diagnostic bundle for one scenario under
@@ -58,11 +59,13 @@ func Dump(dir string, r evaltype.ScenarioResult, traces map[string]json.RawMessa
 			rd.Transcript = a.Transcript
 			rd.ToolCalls = a.ToolCalls
 			rd.Case = a.Case
+			rd.Posts = a.Posts
 		}
 	case *evaltype.JobArtifact:
 		if a != nil {
 			rd.ToolCalls = a.ToolCalls
 			rd.Case = a.Case
+			rd.Posts = a.Posts
 		}
 	}
 	if err := writeJSONFile(filepath.Join(target, "run.json"), rd); err != nil {

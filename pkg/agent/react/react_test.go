@@ -188,8 +188,12 @@ func newRuntimeWithSpend(t *testing.T, llm gollem.LLMClient, cfg budget.Config,
 // run drives the process to a terminal state and returns it.
 func (rt *runtime) run(t *testing.T, in react.Input) *agentkit.Process {
 	t.Helper()
+	return rt.runWithContext(context.Background(), t, in)
+}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+func (rt *runtime) runWithContext(parent context.Context, t *testing.T, in react.Input) *agentkit.Process {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(parent, 10*time.Second)
 	defer cancel()
 
 	served := make(chan error, 1)

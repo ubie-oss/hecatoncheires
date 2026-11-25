@@ -2,8 +2,6 @@ package driver
 
 import (
 	"context"
-	"fmt"
-	"time"
 
 	"github.com/m-mizutani/goerr/v2"
 	"github.com/m-mizutani/hecatoncheires/pkg/domain/model"
@@ -17,8 +15,6 @@ import (
 )
 
 const (
-	// runThreadTS is the synthetic parent timestamp of the scenario thread.
-	runThreadTS = "1700000000.000100"
 	// defaultReporter is used when the scenario does not pin one.
 	defaultReporter = "U-EVALUSER"
 	evalTeamID      = "T-EVAL"
@@ -52,7 +48,9 @@ func (*ThreadInitial) Run(ctx context.Context, e *env.Env, sc *scenario.Scenario
 		reporter = defaultReporter
 	}
 
-	now := time.Now().UTC()
+	now := e.Now()
+	runThreadTS := e.Slack.NextTimestamp()
+	e.Slack.Receive(channel, runThreadTS, runThreadTS, reporter, sc.Input.Text)
 	first := slackmodel.NewMessageFromData(runThreadTS, channel, "", evalTeamID, reporter, reporter, sc.Input.Text, runThreadTS, now, nil)
 
 	logger.Info("eval turn: create (case initialization)", "scenario", sc.Meta.ID, "channel", channel)
@@ -62,7 +60,7 @@ func (*ThreadInitial) Run(ctx context.Context, e *env.Env, sc *scenario.Scenario
 	async.Wait()
 	// The turn is a durable run: the entry point returned once it was recorded,
 	// and everything inspected below is written by its completion handler.
-	if err := e.AwaitTurn(ctx, channel, runThreadTS, ""); err != nil {
+	if err := e.AwaitTurn(ctx, channel, runThreadTS, nil); err != nil {
 		return nil, err
 	}
 
@@ -77,11 +75,10 @@ func (*ThreadInitial) Run(ctx context.Context, e *env.Env, sc *scenario.Scenario
 			break // no pending question -> the agent created the case (or gave up)
 		}
 
-		questionText := lastThreadReply(e)
-		q := evaltype.Question{
-			Reason: questionText,
-			Items:  []evaltype.QuestionItem{{ID: "q", Type: evaltype.QuestionFreeText, Text: questionText}},
+		if session.PendingQuestion == nil {
+			return nil, goerr.New("question outcome is missing the pending question")
 		}
+		q := pendingQuestion(session.PendingQuestion)
 		ans, err := sim.Answer(ctx, q)
 		if err != nil {
 			return nil, goerr.Wrap(err, "user simulator answer")
@@ -90,8 +87,9 @@ func (*ThreadInitial) Run(ctx context.Context, e *env.Env, sc *scenario.Scenario
 
 		// The case does NOT exist yet (the agent deferred creation to ask).
 		// Inject the answer as a thread reply that resumes the create agent.
-		replyTS := fmt.Sprintf("1700000000.%06d", 200+turn)
-		reply := slackmodel.NewMessageFromData(replyTS, channel, runThreadTS, evalTeamID, reporter, reporter, answerText, replyTS, time.Now().UTC(), nil)
+		replyTS := e.Slack.NextTimestamp()
+		e.Slack.Receive(channel, runThreadTS, replyTS, reporter, answerText)
+		reply := slackmodel.NewMessageFromData(replyTS, channel, runThreadTS, evalTeamID, reporter, reporter, answerText, replyTS, e.Now(), nil)
 
 		logger.Info("eval turn: resume create (answer injected)", "scenario", sc.Meta.ID, "turn", turn)
 		if err := e.AgentUC.ResumeThreadCaseCreation(ctx, reply, e.Entry); err != nil {
@@ -100,7 +98,7 @@ func (*ThreadInitial) Run(ctx context.Context, e *env.Env, sc *scenario.Scenario
 		async.Wait()
 		// Wait for the resumed run to reach its own outcome, not the question this
 		// turn is answering.
-		if err := e.AwaitTurn(ctx, channel, runThreadTS, model.SessionEndedWithQuestion); err != nil {
+		if err := e.AwaitTurn(ctx, channel, runThreadTS, session); err != nil {
 			return nil, err
 		}
 
@@ -126,19 +124,21 @@ func (*ThreadInitial) Run(ctx context.Context, e *env.Env, sc *scenario.Scenario
 		Case:       finalCase,
 		Transcript: transcript,
 		ToolCalls:  e.Recorder.Records(),
+		Posts:      e.Slack.Posts(),
 	}, nil
 }
 
-// lastThreadReply returns the text of the most recent thread reply the agent
-// posted (questions and acks are posted via PostThreadReply).
-func lastThreadReply(e *env.Env) string {
-	posts := e.Slack.Posts()
-	for i := len(posts) - 1; i >= 0; i-- {
-		if posts[i].Kind == "thread_reply" {
-			return posts[i].Text
-		}
+func pendingQuestion(p *model.PendingQuestion) evaltype.Question {
+	q := evaltype.Question{Reason: p.Reason, Items: make([]evaltype.QuestionItem, 0, len(p.Items))}
+	for _, item := range p.Items {
+		q.Items = append(q.Items, evaltype.QuestionItem{
+			ID:      item.ID,
+			Type:    evaltype.QuestionType(item.Type),
+			Text:    item.Text,
+			Options: item.Options,
+		})
 	}
-	return ""
+	return q
 }
 
 func joinAnswers(ans evaltype.Answers) string {

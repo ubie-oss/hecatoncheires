@@ -3,26 +3,21 @@ package env
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
 	goslack "github.com/slack-go/slack"
 
 	slacksvc "github.com/m-mizutani/hecatoncheires/pkg/service/slack"
+	"github.com/m-mizutani/hecatoncheires/pkg/usecase/eval/evaltype"
 )
 
 // botUserID is the fixed bot identity the fake reports. Synthesized inputs use
 // distinct user ids so bot-self filters never match the reporter.
 const botUserID = "U-EVALBOT"
 
-// Post is one recorded outbound message from the agent.
-type Post struct {
-	Kind      string // "thread_reply" | "thread_message" | "message"
-	ChannelID string
-	ThreadTS  string
-	Text      string
-	TS        string
-}
+type threadKey struct{ channelID, threadTS string }
 
 // fakeSlack is an in-memory slack.Service used by the eval harness. It records
 // outbound posts (so the driver can recover the agent's questions and replies)
@@ -31,29 +26,65 @@ type Post struct {
 type fakeSlack struct {
 	mu    sync.Mutex
 	seq   int
-	posts []Post
+	start time.Time
+	posts []evaltype.SlackPost
+	// threads holds the seeded thread messages keyed by channel and thread ts, so the Slack
+	// read tools return the conversation a scenario declared.
+	threads map[threadKey][]slacksvc.ConversationMessage
+}
+
+// Receive makes a message visible through Slack reads once its turn arrives.
+func (f *fakeSlack) Receive(channelID, threadTS, ts, user, text string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.addReply(channelID, threadTS, ts, user, text)
+}
+
+func (f *fakeSlack) addReply(channelID, threadTS, ts, user, text string) {
+	key := threadKey{channelID, threadTS}
+	f.threads[key] = append(f.threads[key], slacksvc.ConversationMessage{
+		UserID: user, UserName: user, Text: text, Timestamp: ts, ThreadTS: threadTS,
+	})
 }
 
 var _ slacksvc.Service = (*fakeSlack)(nil)
 
-func newFakeSlack() *fakeSlack { return &fakeSlack{} }
+func newFakeSlack(start time.Time) *fakeSlack {
+	return &fakeSlack{start: start, threads: make(map[threadKey][]slacksvc.ConversationMessage)}
+}
+
+func slackTimestamp(t time.Time) string {
+	return fmt.Sprintf("%d.%06d", t.Unix(), t.Nanosecond()/1000)
+}
+
+// NextTimestamp reserves the next timestamp on the scenario's Slack clock.
+func (f *fakeSlack) NextTimestamp() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.nextTimestamp()
+}
+
+func (f *fakeSlack) nextTimestamp() string {
+	f.seq++
+	return slackTimestamp(f.start.Add(time.Second + time.Duration(f.seq)*time.Microsecond))
+}
 
 func (f *fakeSlack) record(kind, channelID, threadTS, text string) string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.seq++
-	ts := fmt.Sprintf("eval.%d", f.seq)
-	f.posts = append(f.posts, Post{Kind: kind, ChannelID: channelID, ThreadTS: threadTS, Text: text, TS: ts})
+	ts := f.nextTimestamp()
+	f.posts = append(f.posts, evaltype.SlackPost{Kind: kind, ChannelID: channelID, ThreadTS: threadTS, Text: text, TS: ts})
+	if threadTS != "" {
+		f.addReply(channelID, threadTS, ts, botUserID, text)
+	}
 	return ts
 }
 
 // Posts returns a snapshot of all recorded posts in order.
-func (f *fakeSlack) Posts() []Post {
+func (f *fakeSlack) Posts() []evaltype.SlackPost {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	out := make([]Post, len(f.posts))
-	copy(out, f.posts)
-	return out
+	return slices.Clone(f.posts)
 }
 
 // --- slack.Service implementation -----------------------------------------
@@ -84,8 +115,14 @@ func (f *fakeSlack) GetConversationMembers(_ context.Context, _ string) ([]strin
 	return nil, nil
 }
 
-func (f *fakeSlack) GetConversationReplies(_ context.Context, _ string, _ string, _ int) ([]slacksvc.ConversationMessage, error) {
-	return nil, nil
+func (f *fakeSlack) GetConversationReplies(_ context.Context, channelID, threadTS string, limit int) ([]slacksvc.ConversationMessage, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	msgs := f.threads[threadKey{channelID, threadTS}]
+	if limit > 0 && limit < len(msgs) {
+		msgs = msgs[:limit]
+	}
+	return slices.Clone(msgs), nil
 }
 
 func (f *fakeSlack) GetConversationHistory(_ context.Context, _ string, _ time.Time, _ int) ([]slacksvc.ConversationMessage, error) {

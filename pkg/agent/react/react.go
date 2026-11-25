@@ -29,6 +29,7 @@ import (
 	"github.com/gollem-dev/gollem"
 	"github.com/m-mizutani/goerr/v2"
 
+	"github.com/m-mizutani/hecatoncheires/pkg/agent/harness"
 	"github.com/m-mizutani/hecatoncheires/pkg/agent/toolargs"
 	"github.com/m-mizutani/hecatoncheires/pkg/utils/errutil"
 )
@@ -49,6 +50,10 @@ type Input struct {
 	SystemPrompt string `json:"system_prompt"`
 	// Prompt is the first user message.
 	Prompt string `json:"prompt"`
+	// OutputSchema is a JSON Schema the final answer must match. Only a run
+	// driven by an external harness (pkg/agent/harness) honours it; this
+	// strategy's own loop answers in prose and ignores it.
+	OutputSchema json.RawMessage `json:"output_schema,omitempty"`
 }
 
 // Output is what a finished run produces.
@@ -80,6 +85,8 @@ type state struct {
 	// instructions the next call carries, so it has to survive a handoff like
 	// everything else the next transition needs.
 	ReserveToolRounds int `json:"reserve_tool_rounds,omitempty"`
+	// OutputSchema is Input.OutputSchema, carried for a harness-driven run.
+	OutputSchema json.RawMessage `json:"output_schema,omitempty"`
 }
 
 // Option configures the strategy.
@@ -139,10 +146,17 @@ func (s *strategy) Init(in Input) (state, error) {
 	if in.Prompt == "" {
 		return state{}, goerr.New("react: prompt is required")
 	}
-	return state{Phase: phaseGenerate, SystemPrompt: in.SystemPrompt, Prompt: in.Prompt}, nil
+	return state{
+		Phase: phaseGenerate, SystemPrompt: in.SystemPrompt, Prompt: in.Prompt,
+		OutputSchema: in.OutputSchema,
+	}, nil
 }
 
 func (s *strategy) Step(ctx context.Context, sys agentkit.Syscalls, st state) (state, agentkit.Decision[Output], error) {
+	// An installed harness runs the whole loop in one transition; see stepHarness.
+	if h := harness.FromContext(ctx); h != nil {
+		return s.stepHarness(ctx, sys, st, h)
+	}
 	switch st.Phase {
 	case phaseGenerate:
 		return s.stepGenerate(ctx, sys, st)

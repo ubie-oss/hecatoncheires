@@ -16,6 +16,7 @@ import (
 	"github.com/gollem-dev/gollem/llm/openai"
 	"github.com/gollem-dev/gollem/mock"
 	"github.com/m-mizutani/gt"
+	"github.com/m-mizutani/hecatoncheires/pkg/agent/harness"
 	agentkernel "github.com/m-mizutani/hecatoncheires/pkg/agent/kernel"
 	eval "github.com/m-mizutani/hecatoncheires/pkg/usecase/eval"
 	"github.com/m-mizutani/hecatoncheires/pkg/utils/pricing"
@@ -412,6 +413,60 @@ func TestRun_Lifecycle_JobExecution(t *testing.T) {
 	// The job artifact snapshot reflects a successful run with the created action.
 	gt.String(t, sc.ArtifactSnapshot).Contains("Outcome: SUCCESS")
 	gt.String(t, sc.ArtifactSnapshot).Contains("Investigate portal 503 login")
+}
+
+type testHarness func(context.Context, harness.Request) (*harness.Result, error)
+
+func (f testHarness) Run(ctx context.Context, req harness.Request) (*harness.Result, error) {
+	return f(ctx, req)
+}
+
+func TestRun_ExternalHarnessExecutesJobToolsAndJudges(t *testing.T) {
+	dir := t.TempDir()
+	reportPath := filepath.Join(dir, "report.json")
+	var agentCalls, judgeCalls atomic.Int32
+	external := testHarness(func(ctx context.Context, req harness.Request) (*harness.Result, error) {
+		if req.Role == harness.RoleJudge {
+			judgeCalls.Add(1)
+			gt.String(t, req.Prompt).Contains("Investigate portal 503 login")
+			gt.String(t, req.Prompt).Contains("Created a follow-up for the login issue.")
+			gt.String(t, req.Prompt).Contains("# Case before run")
+			gt.String(t, req.Prompt).Contains("Users report 503 on login since this morning.")
+			return &harness.Result{Text: `{"verdicts":[
+				{"id":"job-succeeded","passed":true,"reason":"job succeeded"},
+				{"id":"summary-mentions-login","passed":true,"reason":"addresses login"}
+			]}`}, nil
+		}
+		agentCalls.Add(1)
+		_, err := req.CallTool(ctx, gollem.FunctionCall{
+			ID: "c1", Name: "core__create_action",
+			Arguments: map[string]any{"title": "Investigate portal 503 login"},
+		})
+		if err != nil {
+			return nil, err
+		}
+		return &harness.Result{Text: "Created a follow-up for the login issue."}, nil
+	})
+
+	var out bytes.Buffer
+	code, err := eval.Run(t.Context(), []string{jobScenarioPath()}, eval.Config{
+		LLM:         harness.RefusingLLM{ModelName: "test-model"},
+		Harness:     external,
+		Models:      testModelPolicy(t),
+		Concurrency: 1,
+		Language:    "en",
+		ReportPath:  reportPath,
+	}, &out)
+	gt.NoError(t, err)
+	gt.Number(t, code).Equal(eval.ExitOK)
+	gt.Value(t, agentCalls.Load()).Equal(int32(1))
+	gt.Value(t, judgeCalls.Load()).Equal(int32(1))
+
+	rep := readReport(t, reportPath)
+	gt.A(t, rep.Scenarios).Length(1).Required()
+	gt.String(t, rep.Scenarios[0].ArtifactSnapshot).Contains("Outcome: SUCCESS")
+	gt.String(t, rep.Scenarios[0].ArtifactSnapshot).Contains("Investigate portal 503 login")
+	gt.String(t, rep.Scenarios[0].ArtifactSnapshot).Contains("Created a follow-up for the login issue.")
 }
 
 func TestRun_DryRunNoLLM(t *testing.T) {
