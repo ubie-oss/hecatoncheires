@@ -9,8 +9,8 @@ func init() {
 	}
 	defaultLang = LangEN
 	for lang, table := range messages {
-		for key := range MsgKey(msgKeyCount) {
-			if table[key] == "" {
+		for key, text := range table {
+			if text == "" {
 				panic(fmt.Sprintf("i18n: missing translation for lang=%s key=%d", lang, key))
 			}
 		}
