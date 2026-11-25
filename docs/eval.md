@@ -96,6 +96,49 @@ client over Streamable HTTP using the URL in `endpoint.json`. The URL contains
 the session's access token and stays on IPv4 loopback. Keep the directory
 private and use a separate one for each run.
 
+### Data flow
+
+```mermaid
+sequenceDiagram
+    participant Scenario as Scenario TOML
+    participant Eval as Hecatoncheires eval
+    participant MCP as Local MCP session
+    participant Worker as External harness
+    participant Tools as Scenario tools
+    participant Report as Eval report
+
+    Eval->>MCP: Start a session and publish endpoint.json
+    Scenario->>Eval: Load workspace settings, case history, and checks
+    Note over MCP,Worker: The worker connects directly over MCP or through the harness CLI
+    loop Each agent, judge, or simulator request
+        Eval->>MCP: Queue the prompt, role, and applicable schemas
+        Worker->>MCP: next_request and get_request
+        MCP-->>Worker: Request details and allowed tools
+        opt Tool call
+            Worker->>MCP: call_tool
+            MCP-->>Worker: Call ID
+            MCP->>Tools: Execute within the scenario scope
+            Note over MCP,Tools: A simulated tool can queue a separate tool-sim request
+            Tools-->>MCP: Tool result
+            Worker->>MCP: poll_tool with call ID
+            MCP-->>Worker: Tool result when ready
+        end
+        Worker->>MCP: submit_answer
+        MCP-->>Eval: Accepted answer
+    end
+    Eval->>Report: Record the outcome, tool calls, and verdicts
+```
+
+The original session design used the same pull-and-submit flow over a temporary
+loopback MCP endpoint. The initial runner was process-wide. The current runner
+is scoped to the evaluation context. MCP tool calls return a call ID immediately,
+so workers can handle a simulator request while a tool call is pending. Workers
+can recover the latest call ID with `get_request` after a connection interruption
+and poll the existing call.
+The private session directory is locked while the evaluation is running.
+
+### Drive the session
+
 1. Use `harness next` to take a request and `harness show <id>` to read its
    instructions, role, available tools, and response schema. Use
    `show --json <id>` from a script.
