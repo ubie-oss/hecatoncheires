@@ -56,6 +56,26 @@ func (r *slackUserRepository) GetByID(ctx context.Context, id model.SlackUserID)
 	return &userCopy, nil
 }
 
+func (r *slackUserRepository) FindByEmail(ctx context.Context, email string) (*model.SlackUser, error) {
+	if email == "" {
+		return nil, nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var match *model.SlackUser
+	for _, user := range r.users {
+		if user.Email != email {
+			continue
+		}
+		if match != nil {
+			return nil, nil
+		}
+		userCopy := *user
+		match = &userCopy
+	}
+	return match, nil
+}
+
 // GetByIDs retrieves multiple Slack users by IDs
 func (r *slackUserRepository) GetByIDs(ctx context.Context, ids []model.SlackUserID) (map[model.SlackUserID]*model.SlackUser, error) {
 	r.mu.RLock()

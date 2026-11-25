@@ -87,6 +87,26 @@ func (r *slackUserRepository) GetByID(ctx context.Context, id model.SlackUserID)
 	return &user, nil
 }
 
+func (r *slackUserRepository) FindByEmail(ctx context.Context, email string) (*model.SlackUser, error) {
+	if email == "" {
+		return nil, nil
+	}
+	iter := r.collection().Where("Email", "==", email).Limit(2).Documents(ctx)
+	defer iter.Stop()
+	docs, err := iter.GetAll()
+	if err != nil {
+		return nil, goerr.Wrap(err, "failed to look up Slack user by email")
+	}
+	if len(docs) != 1 {
+		return nil, nil
+	}
+	var user model.SlackUser
+	if err := docs[0].DataTo(&user); err != nil {
+		return nil, goerr.Wrap(err, "failed to unmarshal Slack user")
+	}
+	return &user, nil
+}
+
 // GetByIDs retrieves multiple Slack users by IDs (for DataLoader batching)
 // Handles Firestore GetAll limit of 10 documents per batch by splitting into multiple requests
 func (r *slackUserRepository) GetByIDs(ctx context.Context, ids []model.SlackUserID) (map[model.SlackUserID]*model.SlackUser, error) {

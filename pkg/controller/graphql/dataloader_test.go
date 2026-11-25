@@ -167,6 +167,11 @@ type slackUserCallCounter struct {
 func (c *slackUserCallCounter) GetAll(ctx context.Context) ([]*model.SlackUser, error) {
 	return c.inner.GetAll(ctx)
 }
+
+func (c *slackUserCallCounter) FindByEmail(ctx context.Context, email string) (*model.SlackUser, error) {
+	return c.inner.FindByEmail(ctx, email)
+}
+
 func (c *slackUserCallCounter) GetByID(ctx context.Context, id model.SlackUserID) (*model.SlackUser, error) {
 	return c.inner.GetByID(ctx, id)
 }

@@ -868,15 +868,23 @@ func cmdServe() *cli.Command {
 			// without restarting anything.
 			httpOpts = append(httpOpts, httpctrl.WithDBCheck(httpctrl.NewDBCheckHandler(newDBConsistencyChecker(uc))))
 
-			// Wire the MCP endpoint when enabled. Configure fails loudly if
-			// --mcp is set without a --policy: we never expose the MCP data
-			// surface without a Rego authorization policy.
+			// Wire the MCP endpoint only after its authentication and
+			// authorization configuration has been validated.
 			if mcpCfg.IsEnabled() {
 				policyClient, mcpEnv, err := mcpCfg.Configure(c)
 				if err != nil {
 					return goerr.Wrap(err, "failed to configure MCP endpoint")
 				}
-				mcpHandler := httpctrl.NewMCPHandler(uc.Case, uc.Action, registry, policyClient, mcpEnv)
+				var mcpOpts []httpctrl.MCPOption
+				if identity := mcpCfg.Identity(); identity != nil {
+					mcpOpts = append(mcpOpts, httpctrl.WithMCPIdentity(httpctrl.MCPIdentity{
+						Header:          identity.IdentityHeader,
+						Audience:        identity.GoogleAudience,
+						Users:           repo.SlackUser(),
+						WorkspaceAccess: uc.WorkspaceAccess,
+					}))
+				}
+				mcpHandler := httpctrl.NewMCPHandler(uc.Case, uc.Action, registry, policyClient, mcpEnv, mcpOpts...)
 				httpOpts = append(httpOpts, httpctrl.WithMCP(mcpHandler))
 				logging.Default().Info("MCP endpoint enabled", logAttrsToArgs(mcpCfg.LogAttrs())...)
 			} else {

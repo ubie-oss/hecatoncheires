@@ -86,8 +86,8 @@ The `serve` command (alias: `s`) starts the HTTP server.
 | `--sentry-dsn` | `HECATONCHEIRES_SENTRY_DSN` | - | No | Sentry DSN. Setting a non-empty value enables Sentry error reporting via `errutil.Handle`. See [operations.md](./operations.md) |
 | `--sentry-env` | `HECATONCHEIRES_SENTRY_ENV` | - | No | Sentry environment tag (e.g., `production`, `staging`) |
 | `--sentry-release` | `HECATONCHEIRES_SENTRY_RELEASE` | - | No | Sentry release identifier (e.g., commit SHA) |
-| `--mcp` | `HECATONCHEIRES_MCP` | `false` | No | Enable the MCP (Model Context Protocol) endpoint at `/mcp`. Requires `--policy`. See [mcp.md](./mcp.md) |
-| `--policy` | `HECATONCHEIRES_POLICY` | - | Cond. | Path(s) to Rego policy files or directories used to authorize MCP requests (`data.auth.mcp`). Repeatable. **Required** when `--mcp` is set |
+| `--mcp` | `HECATONCHEIRES_MCP` | `false` | No | Enable the MCP endpoint at `/mcp`. Requires `[mcp]` identity settings in `--global-config` or `--policy`. See [mcp.md](./mcp.md) |
+| `--policy` | `HECATONCHEIRES_POLICY` | - | Cond. | Path(s) to Rego policy files or directories used to authorize MCP requests (`data.auth.mcp`). Repeatable. Required for policy-only access |
 | `--mcp-env` | `HECATONCHEIRES_MCP_ENV` | - | No | Names of environment variables to expose to the Rego policy as `input.env` (allow-list). Repeatable |
 | `--job-max-concurrency` | `HECATONCHEIRES_JOB_MAX_CONCURRENCY` | `1` | No | Maximum number of **scheduled** Agent Job runs executing concurrently across the whole deployment. Set the same value on every instance (including `tick`). `0` disables the limit. See [operations.md](./operations.md) |
 | `--agent-max-steps` | `HECATONCHEIRES_AGENT_MAX_STEPS` | `128` | No | Maximum committed transitions one agent run may execute, sub-agents included. See [Agent runtime budgets](#agent-runtime-budgets) |

@@ -20,6 +20,10 @@ type SlackUserRepository interface {
 	// GetByID retrieves a single Slack user by ID
 	GetByID(ctx context.Context, id model.SlackUserID) (*model.SlackUser, error)
 
+	// FindByEmail returns a user only when exactly one record has the exact,
+	// non-empty email address. No match or an ambiguous match returns nil.
+	FindByEmail(ctx context.Context, email string) (*model.SlackUser, error)
+
 	// GetByIDs retrieves multiple Slack users by IDs (for DataLoader batching)
 	// Returns a map of ID -> SlackUser. Missing users are not included in the map.
 	GetByIDs(ctx context.Context, ids []model.SlackUserID) (map[model.SlackUserID]*model.SlackUser, error)

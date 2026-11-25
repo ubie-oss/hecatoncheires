@@ -7,6 +7,7 @@ var (
 	AuthLoginHandlerForTest    = authLoginHandler
 	AuthCallbackHandlerForTest = authCallbackHandler
 	WorkspacesHandlerForTest   = workspacesHandler
+	WithMCPIdentityForTest     = withMCPIdentity
 )
 
 // ReturnToCookieNameForTest exposes the cookie name so tests can assert

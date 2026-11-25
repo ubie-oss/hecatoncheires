@@ -46,11 +46,15 @@ type mcpHandler struct {
 	registry *model.WorkspaceRegistry
 	policy   interfaces.PolicyClient
 	env      map[string]string
+	identity *mcpIdentity
 }
 
+// MCPOption configures how the MCP handler authenticates requests.
+type MCPOption func(*mcpHandler)
+
 // NewMCPHandler builds the http.Handler that serves the MCP endpoint over
-// Streamable HTTP (mounted at /mcp by the Server). policy is mandatory: every
-// tool call is authorized against data.auth.mcp before any data is read.
+// Streamable HTTP (mounted at /mcp by the Server). It requires either verified
+// identity with workspace authorization or a Rego policy.
 //
 // The transport runs in Stateless mode so each HTTP request carries its own
 // authorization and the request context (populated by withMCPRequestContext)
@@ -62,19 +66,20 @@ func NewMCPHandler(
 	registry *model.WorkspaceRegistry,
 	policy interfaces.PolicyClient,
 	env map[string]string,
+	opts ...MCPOption,
 ) http.Handler {
-	// policy is the sole authorization gate for the MCP data surface; a nil
-	// client would make every tool call panic on h.policy.Query. Fail fast at
-	// construction instead, so a wiring mistake never ships an open endpoint.
-	if policy == nil {
-		panic("MCP handler requires a non-nil policy client")
-	}
 	h := &mcpHandler{
 		caseUC:   caseUC,
 		actionUC: actionUC,
 		registry: registry,
 		policy:   policy,
 		env:      env,
+	}
+	for _, opt := range opts {
+		opt(h)
+	}
+	if h.policy == nil && h.identity == nil {
+		panic("MCP handler requires verified identity or a policy client")
 	}
 
 	server := mcp.NewServer(&mcp.Implementation{Name: mcpServerName, Version: mcpServerVersion}, nil)
@@ -88,7 +93,14 @@ func NewMCPHandler(
 		},
 	)
 
-	return withMCPRequestContext(streamable)
+	var handler http.Handler = streamable
+	if h.policy != nil {
+		handler = withMCPRequestContext(handler)
+	}
+	if h.identity != nil {
+		handler = h.identity.authenticate(handler)
+	}
+	return handler
 }
 
 // withMCPRequestContext captures the transport-level request metadata
@@ -108,17 +120,32 @@ func withMCPRequestContext(next http.Handler) http.Handler {
 	})
 }
 
-// authorize evaluates the Rego policy for one tool call. On allow it returns a
-// context carrying the resolved Slack user (when the policy provided one) as
-// an auth token, so downstream private-case access control can identify the
-// caller. On deny — or on any policy evaluation error — it returns an error
-// that the SDK surfaces to the client as a tool error; no data is read.
+// authorize checks the current Slack user's workspace access and any MCP policy
+// before running a tool. Only policy-only deployments may select a policy user.
 func (h *mcpHandler) authorize(ctx context.Context, toolName, workspaceID string, args map[string]any) (context.Context, error) {
+	var slackUserID string
+	if h.identity != nil {
+		token, err := auth.TokenFromContext(ctx)
+		if err != nil {
+			return ctx, goerr.Wrap(ErrMCPAuthorizationDenied, "verified Slack identity required")
+		}
+		slackUserID = token.Sub
+		if workspaceID != "" {
+			if err := h.identity.WorkspaceAccess.Authorize(ctx, workspaceID, slackUserID); err != nil {
+				return ctx, goerr.Wrap(err, "MCP workspace access check failed")
+			}
+		}
+	}
+	if h.policy == nil {
+		return ctx, nil
+	}
+
 	input := authz.BuildInput(ctx, h.env, &authz.ToolCall{
 		Name:        toolName,
 		WorkspaceID: workspaceID,
 		Args:        args,
 	})
+	input.SlackUserID = slackUserID
 
 	var result authz.Result
 	if err := h.policy.Query(ctx, mcpPolicyQuery, input, &result); err != nil {
@@ -128,7 +155,7 @@ func (h *mcpHandler) authorize(ctx context.Context, toolName, workspaceID string
 		return ctx, goerr.Wrap(ErrMCPAuthorizationDenied, "MCP tool call denied by policy",
 			goerr.V("tool", toolName), goerr.V("workspace_id", workspaceID))
 	}
-	if result.User != "" {
+	if h.identity == nil && result.User != "" {
 		ctx = auth.ContextWithToken(ctx, &auth.Token{Sub: result.User})
 	}
 	return ctx, nil
@@ -136,7 +163,7 @@ func (h *mcpHandler) authorize(ctx context.Context, toolName, workspaceID string
 
 // registerTool wires one typed tool onto the server, wrapping its run function
 // with the shared authorization gate. Every data-returning tool goes through
-// here, so no tool can return data without first passing the Rego policy.
+// here, so no tool can return data without passing its authorization checks.
 func registerTool[In, Out any](s *mcp.Server, h *mcpHandler, name, description string, run func(context.Context, In) (Out, error)) {
 	mcp.AddTool(s, &mcp.Tool{Name: name, Description: description},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in In) (*mcp.CallToolResult, Out, error) {

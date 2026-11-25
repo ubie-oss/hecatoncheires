@@ -1841,13 +1841,15 @@ workspace:
   workspace, only permitted workspaces are offered.
 - **Agent** — the workspace-listing tools list only the workspaces the
   requesting user may access.
+- **MCP with verified identity** — the workspace listing and every
+  workspace-scoped tool use the authenticated Slack user's access. See
+  [MCP Server](mcp.md).
 
 The policy is **not** applied to:
 
 - operations with no human user behind them: scheduled Jobs, `tick`,
   `export`, and messages posted by bots;
-- the MCP endpoint (`/mcp`), which has its own policy (see
-  [MCP Server](mcp.md)).
+- policy-only MCP integrations, whose access is governed by `data.auth.mcp`.
 
 ### Decision caching and failure handling
 
@@ -1981,7 +1983,8 @@ separate **global** config file passed via `--global-config`
 
 The global config holds **workspace groups**, the **`[export]`** configuration
 (see [export.md](./export.md)), the **model definitions** every agent may use,
-and the deployment-wide **`[agent]`** settings.
+the deployment-wide **`[agent]`** settings, and **`[mcp]`** identity settings
+(see [MCP Server](mcp.md#enabling)).
 
 - A global config file MUST NOT contain a `[workspace]` section, and a
   workspace file MUST NOT contain `[[workspace_group]]`. Do not place the
@@ -1990,8 +1993,8 @@ and the deployment-wide **`[agent]`** settings.
   walked for `.toml`), just like `--config`.
 - Sections that are a **set** — `[[workspace_group]]`, `[[llm_model]]` — may be
   spread across several files; only a repeated identifier is a conflict. Sections
-  that configure the deployment as a whole — `[export]`, `[agent]` — must be
-  declared in exactly one file.
+  that configure the deployment as a whole — `[export]`, `[agent]`, `[mcp]` —
+  can each be declared in one file.
 
 ### Workspace Groups
 

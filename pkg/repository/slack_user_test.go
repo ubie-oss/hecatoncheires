@@ -15,6 +15,27 @@ import (
 func runSlackUserRepositoryTest(t *testing.T, newRepo func(t *testing.T) interfaces.Repository) {
 	t.Helper()
 
+	t.Run("FindByEmail requires a unique exact match", func(t *testing.T) {
+		ctx := context.Background()
+		users := newRepo(t).SlackUser()
+		gt.NoError(t, users.DeleteAll(ctx)).Required()
+		email := "reader@example.com"
+		gt.NoError(t, users.SaveMany(ctx, []*model.SlackUser{{ID: "U123", Email: email}, {ID: "U456"}})).Required()
+		found, err := users.FindByEmail(ctx, email)
+		gt.NoError(t, err).Required()
+		gt.Value(t, found).NotNil().Required()
+		gt.Value(t, found.ID).Equal(model.SlackUserID("U123"))
+		for _, missing := range []string{"", "Reader@example.com", "unknown@example.com"} {
+			found, err = users.FindByEmail(ctx, missing)
+			gt.NoError(t, err).Required()
+			gt.Value(t, found).Nil()
+		}
+		gt.NoError(t, users.SaveMany(ctx, []*model.SlackUser{{ID: "U789", Email: email}})).Required()
+		found, err = users.FindByEmail(ctx, email)
+		gt.NoError(t, err).Required()
+		gt.Value(t, found).Nil()
+	})
+
 	t.Run("SaveMany rejects the whole batch when any user lacks an ID", func(t *testing.T) {
 		repo := newRepo(t)
 		ctx := context.Background()
