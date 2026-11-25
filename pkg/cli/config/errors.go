@@ -161,6 +161,9 @@ var (
 	// defines an [agent] section. Like [export], the deployment-wide agent
 	// settings must have a single home.
 	ErrDuplicateAgentConfig = goerr.New("duplicate [agent] section across global config files")
+
+	// ErrDuplicateMCPConfig is returned when multiple global files declare [mcp].
+	ErrDuplicateMCPConfig = goerr.New("duplicate [mcp] section across global config files")
 	// ErrInvalidBudget is returned when a configured budget is negative, or so
 	// small it rounds away to zero (which would read as "not set").
 	ErrInvalidBudget = goerr.New("invalid budget")

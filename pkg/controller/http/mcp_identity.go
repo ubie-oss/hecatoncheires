@@ -1,16 +1,23 @@
 package http
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/m-mizutani/goerr/v2"
 	"github.com/m-mizutani/hecatoncheires/pkg/domain/interfaces"
 	"github.com/m-mizutani/hecatoncheires/pkg/domain/model/auth"
 	"github.com/m-mizutani/hecatoncheires/pkg/utils/errutil"
+	"github.com/m-mizutani/hecatoncheires/pkg/utils/safe"
 	"golang.org/x/net/http/httpguts"
 	"google.golang.org/api/idtoken"
+	"google.golang.org/api/option"
 )
 
 // MCPIdentity configures request authentication and workspace access using
@@ -24,21 +31,53 @@ type MCPIdentity struct {
 
 type mcpIdentity struct {
 	MCPIdentity
-	validate func(context.Context, string, string) (*idtoken.Payload, error)
+	validator *idtoken.Validator
 }
 
 // WithMCPIdentity requires a verified Slack identity for all MCP requests.
-func WithMCPIdentity(config MCPIdentity) MCPOption {
-	return withMCPIdentity(config, idtoken.Validate)
+func WithMCPIdentity(ctx context.Context, config MCPIdentity) (MCPOption, error) {
+	return newMCPIdentityOption(ctx, config, http.DefaultTransport)
 }
 
-func withMCPIdentity(config MCPIdentity, validate func(context.Context, string, string) (*idtoken.Payload, error)) MCPOption {
-	if !httpguts.ValidHeaderFieldName(config.Header) || strings.TrimSpace(config.Audience) == "" || config.Users == nil || config.WorkspaceAccess == nil || validate == nil {
-		panic("MCP identity requires a valid header, audience, user directory, and workspace authorizer")
+func newMCPIdentityOption(ctx context.Context, config MCPIdentity, transport http.RoundTripper) (MCPOption, error) {
+	if !httpguts.ValidHeaderFieldName(config.Header) || strings.TrimSpace(config.Audience) == "" || config.Users == nil || config.WorkspaceAccess == nil {
+		return nil, goerr.New("MCP identity requires a valid header, audience, user directory, and workspace authorizer")
+	}
+	validator, err := idtoken.NewValidator(ctx, option.WithHTTPClient(&http.Client{
+		Transport: googleKeyTransport{base: transport},
+		Timeout:   10 * time.Second,
+	}))
+	if err != nil {
+		return nil, goerr.Wrap(err, "initialize Google ID token validator")
 	}
 	return func(h *mcpHandler) {
-		h.identity = &mcpIdentity{MCPIdentity: config, validate: validate}
+		h.identity = &mcpIdentity{MCPIdentity: config, validator: validator}
+	}, nil
+}
+
+var errGoogleSigningKeysUnavailable = goerr.New("Google signing keys unavailable")
+
+// googleKeyTransport tags key retrieval failures at the source. The Google
+// verifier also returns parse and signature errors, which still mean 401.
+type googleKeyTransport struct{ base http.RoundTripper }
+
+func (t googleKeyTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := t.base.RoundTrip(req)
+	if err != nil {
+		return nil, goerr.Wrap(errGoogleSigningKeysUnavailable, "Google signing key request failed")
 	}
+	defer safe.Close(req.Context(), resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return nil, goerr.Wrap(errGoogleSigningKeysUnavailable, "Google signing key endpoint failed", goerr.V("status", resp.StatusCode))
+	}
+	const maxKeyResponse = 64 << 10
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxKeyResponse+1))
+	var set struct{ Keys []json.RawMessage }
+	if err != nil || len(body) > maxKeyResponse || json.Unmarshal(body, &set) != nil || len(set.Keys) == 0 {
+		return nil, goerr.Wrap(errGoogleSigningKeysUnavailable, "invalid Google signing key response")
+	}
+	resp.Body = io.NopCloser(bytes.NewReader(body))
+	return resp, nil
 }
 
 func (i *mcpIdentity) authenticate(next http.Handler) http.Handler {
@@ -61,8 +100,15 @@ func (i *mcpIdentity) authenticate(next http.Handler) http.Handler {
 		}
 
 		ctx := r.Context()
-		payload, err := i.validate(ctx, value, i.Audience)
+		payload, err := i.validator.Validate(ctx, value, i.Audience)
 		if err != nil {
+			if errors.Is(err, errGoogleSigningKeysUnavailable) {
+				if ctx.Err() == nil {
+					errutil.Handle(ctx, goerr.Wrap(err, "failed to retrieve verifier keys"), "MCP token verification unavailable")
+				}
+				http.Error(w, "Google ID token verification unavailable", http.StatusServiceUnavailable)
+				return
+			}
 			// Verifier errors may contain values from the supplied credential.
 			http.Error(w, "Invalid Google ID token", http.StatusUnauthorized)
 			return

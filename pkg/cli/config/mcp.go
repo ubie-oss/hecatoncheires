@@ -110,7 +110,7 @@ func loadMCPIdentity(paths []string) (*MCPIdentitySection, error) {
 			continue
 		}
 		if identity != nil {
-			return nil, goerr.New("more than one global config file defines [mcp]", goerr.V(ConfigPathKey, path))
+			return nil, goerr.Wrap(ErrDuplicateMCPConfig, "more than one global config file defines [mcp]", goerr.V(ConfigPathKey, path))
 		}
 		if !httpguts.ValidHeaderFieldName(cfg.MCP.IdentityHeader) {
 			return nil, goerr.New("[mcp] identity_header must be a valid HTTP header name", goerr.V(ConfigPathKey, path))

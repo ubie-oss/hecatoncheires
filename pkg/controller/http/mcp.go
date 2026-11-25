@@ -3,6 +3,7 @@ package http
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/m-mizutani/goerr/v2"
@@ -168,33 +169,63 @@ func registerTool[In, Out any](s *mcp.Server, h *mcpHandler, name, description s
 	mcp.AddTool(s, &mcp.Tool{Name: name, Description: description},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in In) (*mcp.CallToolResult, Out, error) {
 			var zero Out
-			args, workspaceID := toolArgs(in)
+			args, workspaceID, err := toolArgs(in)
+			if err != nil {
+				return nil, zero, err
+			}
 			authCtx, err := h.authorize(ctx, name, workspaceID, args)
 			if err != nil {
+				outcome := "error"
+				if errors.Is(err, ErrMCPAuthorizationDenied) || errors.Is(err, model.ErrWorkspaceAccessDenied) {
+					outcome = "denied"
+				}
+				h.auditToolCall(authCtx, name, workspaceID, outcome)
 				return nil, zero, err
 			}
 			out, err := run(authCtx, in)
 			if err != nil {
+				h.auditToolCall(authCtx, name, workspaceID, "error")
 				return nil, zero, err
 			}
+			h.auditToolCall(authCtx, name, workspaceID, "success")
 			return nil, out, nil
 		})
 }
 
+func (h *mcpHandler) auditToolCall(ctx context.Context, toolName, workspaceID, outcome string) {
+	if h.identity == nil {
+		return
+	}
+	token, err := auth.TokenFromContext(ctx)
+	if err != nil {
+		return
+	}
+	logging.From(ctx).Info("MCP tool call",
+		"slack_user_id", token.Sub,
+		"tool", toolName,
+		"workspace_id", workspaceID,
+		"outcome", outcome,
+	)
+}
+
 // toolArgs renders the typed tool input into a generic map for the policy and
-// extracts the workspace_id (empty for tools that take no workspace). The
-// round-trip cannot fail for the concrete input structs used here; on the
-// theoretical marshal error we degrade to empty args, which the default-deny
-// policy treats as an unauthorized call.
-func toolArgs(in any) (map[string]any, string) {
+// extracts the workspace_id (empty for tools that take no workspace). A failed
+// conversion aborts the call before authorization or tool execution.
+func toolArgs(in any) (map[string]any, string, error) {
 	raw, err := json.Marshal(in)
 	if err != nil {
-		return map[string]any{}, ""
+		return nil, "", goerr.Wrap(err, "encode MCP tool arguments")
 	}
 	args := map[string]any{}
 	if err := json.Unmarshal(raw, &args); err != nil {
-		return map[string]any{}, ""
+		return nil, "", goerr.Wrap(err, "decode MCP tool arguments")
 	}
-	workspaceID, _ := args["workspace_id"].(string)
-	return args, workspaceID
+	if value, exists := args["workspace_id"]; exists {
+		workspaceID, ok := value.(string)
+		if !ok || workspaceID == "" {
+			return nil, "", goerr.New("workspace_id must be a non-empty string")
+		}
+		return args, workspaceID, nil
+	}
+	return args, "", nil
 }

@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -26,9 +27,8 @@ import (
 	"github.com/m-mizutani/hecatoncheires/pkg/domain/types"
 	"github.com/m-mizutani/hecatoncheires/pkg/repository/memory"
 	"github.com/m-mizutani/hecatoncheires/pkg/usecase"
+	"github.com/m-mizutani/hecatoncheires/pkg/utils/logging"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"google.golang.org/api/idtoken"
-	"google.golang.org/api/option"
 )
 
 const (
@@ -41,7 +41,7 @@ type mcpRoundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f mcpRoundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
-func newMCPTokenFixture(t *testing.T) (*idtoken.Validator, func(t *testing.T, overrides map[string]any, wrongKey bool) string) {
+func newMCPTokenFixture(t *testing.T) (http.RoundTripper, func(t *testing.T, overrides map[string]any, wrongKey bool) string) {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	gt.NoError(t, err).Required()
@@ -52,21 +52,18 @@ func newMCPTokenFixture(t *testing.T) (*idtoken.Validator, func(t *testing.T, ov
 		"n": base64.RawURLEncoding.EncodeToString(key.N.Bytes()),
 	}}})
 	gt.NoError(t, err).Required()
-	validator, err := idtoken.NewValidator(context.Background(), option.WithHTTPClient(&http.Client{
-		Transport: mcpRoundTripFunc(func(r *http.Request) (*http.Response, error) {
-			if r.URL.String() != "https://www.googleapis.com/oauth2/v3/certs" {
-				return nil, goerr.New("unexpected request for signing keys")
-			}
-			return &http.Response{
-				StatusCode: http.StatusOK,
-				Header:     http.Header{"Cache-Control": {"max-age=3600"}},
-				Body:       io.NopCloser(strings.NewReader(string(keys))),
-			}, nil
-		}),
-	}))
-	gt.NoError(t, err).Required()
+	transport := mcpRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.String() != "https://www.googleapis.com/oauth2/v3/certs" {
+			return nil, goerr.New("unexpected request for signing keys")
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Cache-Control": {"max-age=3600"}},
+			Body:       io.NopCloser(strings.NewReader(string(keys))),
+		}, nil
+	})
 
-	return validator, func(t *testing.T, overrides map[string]any, wrongKey bool) string {
+	return transport, func(t *testing.T, overrides map[string]any, wrongKey bool) string {
 		t.Helper()
 		claims := map[string]any{
 			"iss": "https://accounts.google.com", "sub": "1234", "aud": mcpTestAudience,
@@ -101,7 +98,7 @@ func mcpRegoPolicy(t *testing.T, rego string) interfaces.PolicyClient {
 
 func TestMCP_IdentityAppliesWorkspaceAccess(t *testing.T) {
 	ctx := context.Background()
-	validator, issueToken := newMCPTokenFixture(t)
+	transport, issueToken := newMCPTokenFixture(t)
 	repo := memory.New()
 	gt.NoError(t, repo.SlackUser().SaveMany(ctx, []*model.SlackUser{
 		{ID: "UREADER", Email: mcpTestEmail},
@@ -147,9 +144,10 @@ func TestMCP_IdentityAppliesWorkspaceAccess(t *testing.T) {
 		}
 	}
 
-	identity := httpctrl.WithMCPIdentityForTest(httpctrl.MCPIdentity{
+	identity, err := httpctrl.NewMCPIdentityOptionForTest(ctx, httpctrl.MCPIdentity{
 		Header: mcpTestIdentityHeader, Audience: mcpTestAudience, Users: repo.SlackUser(), WorkspaceAccess: access,
-	}, validator.Validate)
+	}, transport)
+	gt.NoError(t, err).Required()
 	for _, tc := range []struct {
 		name    string
 		policy  interfaces.PolicyClient
@@ -160,9 +158,34 @@ func TestMCP_IdentityAppliesWorkspaceAccess(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			handler := httpctrl.NewMCPHandler(caseUC, actionUC, registry, tc.policy, nil, identity)
-			srv := httptest.NewServer(handler)
-			t.Cleanup(srv.Close)
 			jwt := issueToken(t, nil, false)
+			var logs strings.Builder
+			logger := slog.New(slog.NewJSONHandler(&logs, nil))
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handler.ServeHTTP(w, r.WithContext(logging.With(r.Context(), logger)))
+			}))
+			t.Cleanup(func() {
+				srv.Close()
+				seen := map[string]bool{}
+				for line := range strings.SplitSeq(logs.String(), "\n") {
+					if line == "" {
+						continue
+					}
+					var record map[string]any
+					gt.NoError(t, json.Unmarshal([]byte(line), &record)).Required()
+					if record["msg"] != "MCP tool call" || record["tool"] != "hecaton_list_cases" {
+						continue
+					}
+					gt.Value(t, record["slack_user_id"]).Equal("UREADER")
+					workspace, _ := record["workspace_id"].(string)
+					outcome, _ := record["outcome"].(string)
+					seen[workspace+"/"+outcome] = true
+				}
+				gt.Bool(t, seen["visible/success"]).True()
+				gt.Bool(t, seen["restricted/denied"]).True()
+				gt.Bool(t, strings.Contains(logs.String(), jwt)).False()
+				gt.Bool(t, strings.Contains(logs.String(), mcpTestEmail)).False()
+			})
 			client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "1.0.0"}, nil)
 			session, err := client.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: srv.URL, HTTPClient: &http.Client{
 				Transport: mcpRoundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -219,14 +242,55 @@ func TestMCP_IdentityAppliesWorkspaceAccess(t *testing.T) {
 	}
 }
 
+func TestMCP_KeyRetrievalFailuresAreUnavailable(t *testing.T) {
+	ctx := context.Background()
+	_, issueToken := newMCPTokenFixture(t)
+	token := issueToken(t, nil, false)
+	repo := memory.New()
+	registry := model.NewWorkspaceRegistry()
+	access, err := usecase.NewWorkspaceAccessUseCase(registry, nil, repo.SlackUser(), usecase.WorkspaceAccessCacheConfig{})
+	gt.NoError(t, err).Required()
+	for _, tc := range []struct {
+		name string
+		code int
+		body string
+	}{
+		{name: "upstream HTTP failure", code: http.StatusBadGateway},
+		{name: "invalid key response", code: http.StatusOK, body: "not JSON"},
+		{name: "network failure"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			option, err := httpctrl.NewMCPIdentityOptionForTest(ctx, httpctrl.MCPIdentity{
+				Header: mcpTestIdentityHeader, Audience: mcpTestAudience, Users: repo.SlackUser(), WorkspaceAccess: access,
+			}, mcpRoundTripFunc(func(_ *http.Request) (*http.Response, error) {
+				if tc.code == 0 {
+					return nil, goerr.New("network failure containing untrusted text: " + token)
+				}
+				return &http.Response{StatusCode: tc.code, Body: io.NopCloser(strings.NewReader(tc.body))}, nil
+			}))
+			gt.NoError(t, err).Required()
+			var logs strings.Builder
+			logger := slog.New(slog.NewJSONHandler(&logs, nil))
+			req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+			req = req.WithContext(logging.With(req.Context(), logger))
+			req.Header.Set(mcpTestIdentityHeader, token)
+			resp := httptest.NewRecorder()
+			httpctrl.NewMCPHandler(nil, nil, registry, nil, nil, option).ServeHTTP(resp, req)
+			gt.Number(t, resp.Code).Equal(http.StatusServiceUnavailable)
+			gt.Bool(t, strings.Contains(logs.String(), "MCP token verification unavailable")).True()
+			gt.Bool(t, strings.Contains(logs.String()+resp.Body.String(), token)).False()
+		})
+	}
+}
+
 func TestMCP_IdentityRejectsUntrustedRequests(t *testing.T) {
 	ctx := context.Background()
-	validator, issueToken := newMCPTokenFixture(t)
+	transport, issueToken := newMCPTokenFixture(t)
 	users := memory.New().SlackUser()
 	gt.NoError(t, users.SaveMany(ctx, []*model.SlackUser{
 		{ID: "UREADER", Email: mcpTestEmail},
 		{ID: "UFIRST", Email: "duplicate@example.com"},
-		{ID: "USECOND", Email: "duplicate@example.com"},
+		{ID: "USECOND", Email: "Duplicate@example.com"},
 		{ID: "UGMAIL", Email: "reader@gmail.com"},
 	})).Required()
 	registry := model.NewWorkspaceRegistry()
@@ -259,6 +323,7 @@ func TestMCP_IdentityRejectsUntrustedRequests(t *testing.T) {
 		{name: "ambiguous email", values: []string{issueToken(t, map[string]any{"email": "duplicate@example.com"}, false)}, status: http.StatusForbidden},
 		{name: "lookup failure", values: []string{good}, status: http.StatusServiceUnavailable, lookupErr: true},
 		{name: "raw JWT", values: []string{good}, status: http.StatusOK},
+		{name: "normalized email", values: []string{issueToken(t, map[string]any{"email": "Reader@Example.com"}, false)}, status: http.StatusOK},
 		{name: "Gmail identity", values: []string{issueToken(t, map[string]any{"email": "reader@gmail.com", "hd": nil}, false)}, status: http.StatusOK},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -266,9 +331,10 @@ func TestMCP_IdentityRejectsUntrustedRequests(t *testing.T) {
 			if tc.lookupErr {
 				userRepo = mcpFailingSlackDirectory{users}
 			}
-			identity := httpctrl.WithMCPIdentityForTest(httpctrl.MCPIdentity{
+			identity, err := httpctrl.NewMCPIdentityOptionForTest(ctx, httpctrl.MCPIdentity{
 				Header: mcpTestIdentityHeader, Audience: mcpTestAudience, Users: userRepo, WorkspaceAccess: access,
-			}, validator.Validate)
+			}, transport)
+			gt.NoError(t, err).Required()
 			// A permissive legacy policy must never bypass identity authentication.
 			handler := httpctrl.NewMCPHandler(nil, nil, registry, allowAsMember(), nil, identity)
 			body := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}`

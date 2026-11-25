@@ -73,7 +73,7 @@ identity_header = "Authorization"
 google_audience = "other.apps.googleusercontent.com"
 `)
 	_, _, _, err = runMCPConfigure(t, []string{"--mcp", "--global-config", path, "--global-config", other})
-	gt.Error(t, err)
+	gt.Error(t, err).Is(config.ErrDuplicateMCPConfig)
 }
 
 func TestMCP_InvalidIdentityDoesNotFallBackToPolicy(t *testing.T) {

@@ -877,12 +877,16 @@ func cmdServe() *cli.Command {
 				}
 				var mcpOpts []httpctrl.MCPOption
 				if identity := mcpCfg.Identity(); identity != nil {
-					mcpOpts = append(mcpOpts, httpctrl.WithMCPIdentity(httpctrl.MCPIdentity{
+					opt, err := httpctrl.WithMCPIdentity(ctx, httpctrl.MCPIdentity{
 						Header:          identity.IdentityHeader,
 						Audience:        identity.GoogleAudience,
 						Users:           repo.SlackUser(),
 						WorkspaceAccess: uc.WorkspaceAccess,
-					}))
+					})
+					if err != nil {
+						return goerr.Wrap(err, "configure MCP identity verifier")
+					}
+					mcpOpts = append(mcpOpts, opt)
 				}
 				mcpHandler := httpctrl.NewMCPHandler(uc.Case, uc.Action, registry, policyClient, mcpEnv, mcpOpts...)
 				httpOpts = append(httpOpts, httpctrl.WithMCP(mcpHandler))

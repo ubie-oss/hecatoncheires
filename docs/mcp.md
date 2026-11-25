@@ -28,12 +28,34 @@ case-insensitive. The server checks Google's signature, issuer, audience,
 expiration, and verified email. It accepts Gmail and Google Workspace email
 addresses that Google can vouch for. See [Google's ID token verification guide](https://developers.google.com/identity/gsi/web/guides/verify-google-id-token).
 
-The verified email must exactly match one record in the synced Slack user
-directory. Enable Slack user synchronization with the `users:read` and
-`users:read.email` scopes and keep the directory current. A missing or ambiguous
-match is denied. The Slack user then gets the same workspace access as in the
-Web UI. Workspace listings are filtered and all Case and Action tools check the
-target workspace before reading it.
+The verified email must match one record in the synced Slack user directory
+after ignoring letter case and surrounding whitespace. Enable Slack user
+synchronization with the `users:read` and `users:read.email` scopes and keep
+the directory current. A missing or ambiguous match is denied. The Slack user
+then gets the same workspace access as in the Web UI. Workspace listings are
+filtered and all Case and Action tools check the target workspace before reading it.
+
+### Obtaining a user token
+
+Register a Google OAuth client for the MCP integration and set its client ID
+as `google_audience`. For a desktop client, use authorization code flow with
+PKCE and the `openid email` scopes. The client sends `id_token` from the token
+response. For background refresh, request offline access and use the OAuth
+refresh token to obtain a fresh `id_token` before the current token expires.
+If the response has no usable ID token, repeat sign-in. A client that only
+accepts static headers needs a helper that supplies a current token on each
+request. See [Google's desktop OAuth guide](https://developers.google.com/identity/protocols/oauth2/native-app)
+and [token response reference](https://developers.google.com/identity/openid-connect/reference#tokenresponse).
+
+For an organization-only service, use a Google OAuth consent screen whose
+user type is Internal. Slack guests can appear in the synced directory.
+Review each workspace's `[authz]` policy when deciding access for matched
+users. A workspace with no `[authz]` policy allows any matched user.
+
+Before switching traffic, confirm that Slack sync has published a directory.
+With a real client and a synced Slack account, verify sign-in and token
+renewal, confirm `hecaton_list_workspaces` shows the expected workspaces, and
+check that explicitly requesting a denied workspace fails.
 
 To retain policy-only access for existing integrations, omit `[mcp]` and
 supply at least one Rego policy with `--policy`:
@@ -44,6 +66,11 @@ hecatoncheires serve \
   --policy ./policies/mcp.rego \
   --mcp-env MCP_TOKEN
 ```
+
+Setting `[mcp]` requires a user token on every request to that instance's
+`/mcp`, even if a Rego policy would allow the call. Migrate policy-only clients
+before the switch or keep policy-only and verified-identity clients on
+separately configured instances and routes.
 
 | Flag | Env var | Default | Description |
 |------|---------|---------|-------------|
@@ -172,6 +199,18 @@ Policies are compiled once at startup; a malformed policy makes `serve` fail
 immediately rather than at the first request.
 
 ## Security notes
+
+- **Route `/mcp` explicitly.** When adding an MCP ingress to an existing
+  deployment, expose `/mcp` through that ingress and keep the existing network
+  controls for the Web UI and operational endpoints.
+- **Audit verified tool calls.** The `MCP tool call` log includes the Slack user
+  ID, tool name, workspace ID where applicable, and outcome. It excludes token
+  values, email addresses, and other tool arguments.
+- **Watch authentication dependencies.** A signing-key retrieval failure or
+  Slack directory read failure returns HTTP 503 and is logged. Missing or
+  invalid tokens return 401, and missing or ambiguous Slack matches return
+  403. Each successful Slack sync publishes a complete directory. A failed
+  refresh keeps the last published version available.
 
 - **Credentials are kept out of logs.** The identity header is consumed by
   MCP authentication. The `input.env` allow-list is tagged for
