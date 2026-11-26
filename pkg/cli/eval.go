@@ -8,12 +8,14 @@ import (
 	"github.com/m-mizutani/goerr/v2"
 	"github.com/urfave/cli/v3"
 
+	"github.com/m-mizutani/hecatoncheires/pkg/agent/harness"
 	notiontool "github.com/m-mizutani/hecatoncheires/pkg/agent/tool/notion"
 	slacktool "github.com/m-mizutani/hecatoncheires/pkg/agent/tool/slack"
 	"github.com/m-mizutani/hecatoncheires/pkg/cli/config"
 	"github.com/m-mizutani/hecatoncheires/pkg/i18n"
 	eval "github.com/m-mizutani/hecatoncheires/pkg/usecase/eval"
 	"github.com/m-mizutani/hecatoncheires/pkg/utils/logging"
+	"github.com/m-mizutani/hecatoncheires/pkg/utils/safe"
 )
 
 // evalDefaultBudgetUSD is what one scenario run may spend when the global config
@@ -41,10 +43,12 @@ func cmdEval() *cli.Command {
 		verbose      bool
 		langStr      string
 		concurrency  int
+		harnessDir   string
 	)
 
 	flags := []cli.Flag{
 		&cli.BoolFlag{Name: "list-tools", Usage: "Print the catalog of tools usable in scenarios and exit", Destination: &listTools},
+		&cli.StringFlag{Name: "harness-dir", Usage: "Publish eval requests for an external worker in this private directory", Destination: &harnessDir},
 		&cli.BoolFlag{Name: "dryrun", Usage: "Validate scenario files only (no LLM / tools / network)", Destination: &dryRun},
 		&cli.StringFlag{Name: "report", Usage: "Write a JSON report to this path", Destination: &reportPath},
 		&cli.IntFlag{Name: "concurrency", Usage: "Number of scenarios to run in parallel", Value: 2, Destination: &concurrency},
@@ -122,7 +126,7 @@ func cmdEval() *cli.Command {
 				// one would. It passes no workspace registry: scenarios bring
 				// their own workspace per run, so every DEFINED model gets a
 				// client rather than only the ones a registry names.
-				setup, err := buildEvalLLMSetup(ctx, c, &appCfg, &llmCfg)
+				setup, err := buildEvalLLMSetup(ctx, c, &appCfg, &llmCfg, harnessDir != "")
 				if err != nil {
 					return err
 				}
@@ -132,7 +136,14 @@ func cmdEval() *cli.Command {
 				cfg.LLM = setup.Default
 				cfg.Models = setup.Policy
 
-				if err := wireLiveTools(ctx, &cfg, &slackCfg, &githubCfg, &jiraCfg, &webfetchCfg, notionTok); err != nil {
+				if harnessDir != "" {
+					session, err := harness.NewSession(harnessDir)
+					if err != nil {
+						return goerr.Wrap(err, "start the external eval harness")
+					}
+					defer safe.Close(ctx, session)
+					cfg.Harness = session
+				} else if err := wireLiveTools(ctx, &cfg, &slackCfg, &githubCfg, &jiraCfg, &webfetchCfg, notionTok); err != nil {
 					return err
 				}
 			}

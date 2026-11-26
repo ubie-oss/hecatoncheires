@@ -460,6 +460,29 @@ func (h *Handler) parentSequenceLocked(ctx context.Context) int64 {
 	return seq
 }
 
+// EnsureExternalTurn records a placeholder LLM call when the run has none yet.
+//
+// A run whose loop is driven by an external harness (pkg/agent/harness) makes
+// its model calls outside this process, so no LLM_RESPONSE is ever recorded —
+// and a TOOL_CALL with no response to point at is rejected by
+// JobRunEvent.Validate, which would drop every tool call of such a run from its
+// timeline. One placeholder per run gives them a parent. It says what it is in
+// its text, and carries no tokens: nothing here is counted as spend.
+func (h *Handler) EnsureExternalTurn(ctx context.Context, note string) {
+	h.mu.Lock()
+	seq := h.parentSequenceLocked(ctx)
+	h.mu.Unlock()
+	if seq != 0 {
+		return
+	}
+	spanCtx := h.StartLLMCall(ctx)
+	h.EndLLMCall(spanCtx, &trace.LLMCallData{
+		Model:    "external-harness",
+		Request:  &trace.LLMRequest{},
+		Response: &trace.LLMResponse{Texts: []string{note}},
+	}, nil)
+}
+
 // addToolStatsLocked folds one execution into the per-tool tally. The caller
 // holds h.mu.
 //

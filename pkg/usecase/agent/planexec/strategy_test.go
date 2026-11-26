@@ -285,7 +285,12 @@ func newRuntimeWithSpend[T planexec.Validatable](t *testing.T, llm gollem.LLMCli
 // run drives the process to a terminal state and returns it.
 func (rt *planexecRuntime) run(t *testing.T, in planexec.Input, meta map[string]string) *agentkit.Process {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	return rt.runWithContext(context.Background(), t, in, meta)
+}
+
+func (rt *planexecRuntime) runWithContext(parent context.Context, t *testing.T, in planexec.Input, meta map[string]string) *agentkit.Process {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(parent, 15*time.Second)
 	defer cancel()
 
 	served := make(chan error, 1)

@@ -17,6 +17,7 @@ import (
 	"github.com/m-mizutani/goerr/v2"
 
 	"github.com/m-mizutani/hecatoncheires/pkg/agent/budget"
+	"github.com/m-mizutani/hecatoncheires/pkg/agent/harness"
 	agentkernel "github.com/m-mizutani/hecatoncheires/pkg/agent/kernel"
 	"github.com/m-mizutani/hecatoncheires/pkg/agent/tool/casewriter"
 	"github.com/m-mizutani/hecatoncheires/pkg/agent/tool/core"
@@ -25,14 +26,17 @@ import (
 	memotool "github.com/m-mizutani/hecatoncheires/pkg/agent/tool/memo"
 	notiontool "github.com/m-mizutani/hecatoncheires/pkg/agent/tool/notion"
 	slacktool "github.com/m-mizutani/hecatoncheires/pkg/agent/tool/slack"
+	"github.com/m-mizutani/hecatoncheires/pkg/agent/tool/slackpost"
 	"github.com/m-mizutani/hecatoncheires/pkg/agent/tool/webfetch"
 	"github.com/m-mizutani/hecatoncheires/pkg/cli/config"
 	"github.com/m-mizutani/hecatoncheires/pkg/domain/interfaces"
 	"github.com/m-mizutani/hecatoncheires/pkg/domain/model"
 	modelconfig "github.com/m-mizutani/hecatoncheires/pkg/domain/model/config"
+	slackmodel "github.com/m-mizutani/hecatoncheires/pkg/domain/model/slack"
 	"github.com/m-mizutani/hecatoncheires/pkg/domain/types"
 	"github.com/m-mizutani/hecatoncheires/pkg/repository/agentarchive"
 	"github.com/m-mizutani/hecatoncheires/pkg/repository/memory"
+	slacksvc "github.com/m-mizutani/hecatoncheires/pkg/service/slack"
 	"github.com/m-mizutani/hecatoncheires/pkg/usecase"
 	"github.com/m-mizutani/hecatoncheires/pkg/usecase/eval/evaltype"
 	"github.com/m-mizutani/hecatoncheires/pkg/usecase/eval/scenario"
@@ -87,6 +91,7 @@ type Env struct {
 	SeededCases    []*model.Case
 	MonitorChannel string
 	Language       string
+	Now            func() time.Time
 
 	// stopAgents shuts the agent worker down. Every agent is a durable Process
 	// driven by that worker, so a scenario that never starts it produces a run
@@ -112,27 +117,28 @@ func (e *Env) Stop() {
 // scenario rather than the whole eval run.
 const awaitTurnTimeout = 10 * time.Minute
 
-// AwaitTurn blocks until the turn started on this thread has finished — the
-// agent either recorded how it ended on the Session, or committed the case.
+func turnTimeout(ctx context.Context) time.Duration {
+	if harness.FromContext(ctx) != nil {
+		return max(awaitTurnTimeout, harness.SessionQueueTimeout+harness.RunTimeout+time.Minute)
+	}
+	return awaitTurnTimeout
+}
+
+// AwaitTurn blocks until the agent records how this turn ended on the Session.
 //
 // A driver needs it because a turn is a durable Process: the entry point returns
 // once the run is recorded, and everything the driver then inspects (the pending
 // question, the created case, the thread replies) is written afterwards by the
 // run's completion handler.
-func (e *Env) AwaitTurn(ctx context.Context, channelID, threadTS string, before model.SessionEndReason) error {
-	deadline := time.Now().Add(awaitTurnTimeout)
+func (e *Env) AwaitTurn(ctx context.Context, channelID, threadTS string, before *model.Session) error {
+	deadline := time.Now().Add(turnTimeout(ctx))
 	for {
 		ssn, err := e.Repo.Session().GetByThread(ctx, channelID, threadTS)
 		if err != nil {
 			return goerr.Wrap(err, "await turn: load session",
 				goerr.V("channel_id", channelID), goerr.V("thread_ts", threadTS))
 		}
-		if ssn != nil && ssn.LastAction != "" && ssn.LastAction != before {
-			return nil
-		}
-		// A create turn that committed its case is finished even if the outcome
-		// stamp lost a race with this read.
-		if c, err := e.Repo.Case().GetBySlackThread(ctx, e.Entry.Workspace.ID, channelID, threadTS); err == nil && c != nil {
+		if turnFinished(ssn, before) {
 			return nil
 		}
 		if time.Now().After(deadline) {
@@ -147,6 +153,22 @@ func (e *Env) AwaitTurn(ctx context.Context, channelID, threadTS string, before 
 	}
 }
 
+func turnFinished(current, before *model.Session) bool {
+	if current == nil || current.LastAction == "" {
+		return false
+	}
+	if before == nil || current.LastAction != before.LastAction {
+		return true
+	}
+	if current.LastAction != model.SessionEndedWithQuestion || current.PendingQuestion == nil {
+		return false
+	}
+	// A consecutive question has the same terminal action and a different
+	// posted form. Resuming may update other session fields before the turn
+	// actually completes, so timestamps alone cannot identify the new outcome.
+	return before.PendingQuestion == nil || current.PendingQuestion.PostedMessageTS != before.PendingQuestion.PostedMessageTS
+}
+
 // AwaitJobRun blocks until the newest run recorded for this Job has left the
 // RUNNING stage, and returns that run's log.
 //
@@ -156,7 +178,7 @@ func (e *Env) AwaitTurn(ctx context.Context, channelID, threadTS string, before 
 // and actions the run produced — is written afterwards, by the run's completion
 // handler.
 func (e *Env) AwaitJobRun(ctx context.Context, key model.JobRunKey) (*model.JobRunLog, error) {
-	deadline := time.Now().Add(awaitTurnTimeout)
+	deadline := time.Now().Add(turnTimeout(ctx))
 	for {
 		logs, err := e.Repo.JobRunLog().List(ctx, key, 0)
 		if err != nil {
@@ -219,7 +241,7 @@ type agentRuntime struct {
 // Everything is in-process and per-scenario: the Process store, the history and
 // the trace all live and die with the Env, which is what keeps two scenarios from
 // seeing each other's runs.
-func startAgentRuntime(repo interfaces.Repository, registry *model.WorkspaceRegistry,
+func startAgentRuntime(parent context.Context, repo interfaces.Repository, registry *model.WorkspaceRegistry,
 	uc *usecase.UseCases, llm gollem.LLMClient, models agentkernel.ModelPolicy,
 ) (*agentRuntime, error) {
 	procRepo := agentprocmemory.New()
@@ -267,7 +289,12 @@ func startAgentRuntime(repo interfaces.Repository, registry *model.WorkspaceRegi
 	uc.Agent.BindAgentKernel(k, probe)
 	durable.Bind(k, probe)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(parent)
+	serveOpts := []agentkit.ServeOption{agentkit.WithPollInterval(5 * time.Millisecond)}
+	if harness.FromContext(ctx) != nil {
+		// An external worker drives the tool loop in a single claim.
+		serveOpts = append(serveOpts, agentkit.WithLease(harness.SessionQueueTimeout+harness.RunTimeout+time.Minute))
+	}
 	done := make(chan error, 1)
 	// Deliberately NOT async.Dispatch / DispatchCancelable, which every other
 	// background goroutine in this codebase uses. Those register on the package
@@ -285,7 +312,7 @@ func startAgentRuntime(repo interfaces.Repository, registry *model.WorkspaceRegi
 				done <- nil
 			}
 		}()
-		done <- agentkernel.Serve(ctx, k, agentkit.WithPollInterval(5*time.Millisecond))
+		done <- agentkernel.Serve(ctx, k, serveOpts...)
 	}()
 	return &agentRuntime{
 		durable: durable,
@@ -324,12 +351,20 @@ func Build(ctx context.Context, sc *scenario.Scenario, opts Options) (*Env, erro
 		return nil, err
 	}
 
-	fake := newFakeSlack()
+	clock, err := sc.Meta.Clock()
+	if err != nil {
+		return nil, err
+	}
+	if clock == nil {
+		clock = func() time.Time { return time.Now().UTC() }
+	}
+	fake := newFakeSlack(clock())
+	slackRetriever := &seededRetriever{rec: recorder, slack: fake}
 	ucOpts := []usecase.Option{
 		usecase.WithLLMClient(opts.LLM),
 		usecase.WithSlackService(fake),
 		usecase.WithSlackSearchService(slackSearch),
-		usecase.WithSlackMessageRetriever(toolsim.SlackRetriever(recorder)),
+		usecase.WithSlackMessageRetriever(slackRetriever),
 		usecase.WithSlackToolLimits(opts.SlackToolLimits),
 		usecase.WithNotionToolClient(notionClient),
 		usecase.WithHistoryRepository(historyRepo),
@@ -350,8 +385,11 @@ func Build(ctx context.Context, sc *scenario.Scenario, opts Options) (*Env, erro
 		return nil, goerr.New("env: agent use case was not constructed (LLM/history/trace wiring incomplete)")
 	}
 
-	seeded, err := seedCases(ctx, repo, entry.Workspace.ID, sc)
+	seeded, err := seedCases(ctx, repo, entry.Workspace.ID, sc, fake, clock)
 	if err != nil {
+		return nil, err
+	}
+	if err := seedSlackUsers(ctx, repo, sc); err != nil {
 		return nil, err
 	}
 	if err := seedSources(ctx, repo, entry.Workspace.ID, sc); err != nil {
@@ -360,11 +398,20 @@ func Build(ctx context.Context, sc *scenario.Scenario, opts Options) (*Env, erro
 
 	// The runtime is built first: the Job agents must be registered before the
 	// Kernel exists, and the JobRunner needs the runtime to dispatch onto.
-	runtime, err := startAgentRuntime(repo, registry, uc, opts.LLM, opts.Models)
+	runtime, err := startAgentRuntime(ctx, repo, registry, uc, opts.LLM, opts.Models)
 	if err != nil {
 		return nil, err
 	}
-	jobRunner := buildJobRunner(repo, registry, uc, opts.LLM, runtime.durable)
+	uc.Agent.SetThreadCaseClock(ctx, clock)
+	jobRunner := buildJobRunner(repo, registry, uc, opts.LLM, runtime.durable, jobSims{
+		slack:       fake,
+		notion:      notionClient,
+		webfetch:    opts.WebFetch,
+		clock:       clock,
+		slackLimits: opts.SlackToolLimits,
+		retriever:   slackRetriever,
+		slackSearch: slackSearch,
+	})
 	runtime.durable.AttachRunner(jobRunner)
 
 	return &Env{
@@ -379,6 +426,7 @@ func Build(ctx context.Context, sc *scenario.Scenario, opts Options) (*Env, erro
 		Trace:          traceRepo,
 		SeededCases:    seeded,
 		MonitorChannel: sc.Workspace.SlackMonitorChannel,
+		Now:            clock,
 		Language:       sc.Meta.Language,
 	}, nil
 }
@@ -442,32 +490,93 @@ func buildRegistry(wc *config.WorkspaceConfig) (*model.WorkspaceRegistry, *model
 	return registry, entry
 }
 
-// seedCases injects the scenario's prior cases into the memory repository. Field
-// values are not populated in v1 (the scenario `cases.fields` are reserved for
-// future search use); core identity fields are set so the repository's
-// create-time validation passes.
-func seedCases(ctx context.Context, repo interfaces.Repository, wsID string, sc *scenario.Scenario) ([]*model.Case, error) {
-	now := time.Now().UTC()
+// seedCases loads the case and Slack state available before the replay starts.
+func seedCases(ctx context.Context, repo interfaces.Repository, wsID string, sc *scenario.Scenario, fake *fakeSlack, clock func() time.Time) ([]*model.Case, error) {
+	now := clock()
 	out := make([]*model.Case, 0, len(sc.Cases))
 	for i := range sc.Cases {
 		cs := sc.Cases[i]
+		reporter := cs.Reporter
+		if reporter == "" {
+			reporter = seedReporterID
+		}
 		c := &model.Case{
 			Title:          cs.Title,
 			Description:    cs.Description,
 			Status:         types.CaseStatusOpen,
-			ReporterID:     seedReporterID,
+			ReporterID:     reporter,
 			SlackChannelID: sc.Workspace.SlackMonitorChannel,
 			BoardStatus:    cs.BoardStatus,
 			CreatedAt:      now,
 			UpdatedAt:      now,
 		}
+		// A seeded thread binds the case to a Slack thread, as a thread-mode case
+		// is in production: the Slack post tool replies into it and the use case's
+		// own change notices (assign, status) land in the fake as well.
+		threadStart := now.Add(-time.Duration(i+1) * time.Second)
+		if len(cs.Thread) > 0 {
+			if c.SlackChannelID == "" {
+				return nil, goerr.New("seeded case thread requires a Slack monitor channel", goerr.V("title", cs.Title))
+			}
+			c.SlackThreadTS = slackTimestamp(threadStart)
+		}
+		if len(cs.Fields) > 0 && sc.Workspace.FieldSchema != nil {
+			c.FieldValues = make(map[string]model.FieldValue, len(cs.Fields))
+			for _, def := range sc.Workspace.FieldSchema.Fields {
+				if v, ok := cs.Fields[def.ID]; ok {
+					c.FieldValues[def.ID] = model.FieldValue{FieldID: types.FieldID(def.ID), Type: def.Type, Value: v}
+				}
+			}
+		}
 		created, err := repo.Case().Create(ctx, wsID, c)
 		if err != nil {
 			return nil, goerr.Wrap(err, "seed case", goerr.V("title", cs.Title))
 		}
+		for j, message := range cs.Thread {
+			createdAt := threadStart.Add(time.Duration(j) * time.Microsecond)
+			ts := slackTimestamp(createdAt)
+			fake.Receive(c.SlackChannelID, c.SlackThreadTS, ts, message.User, message.Text)
+			msg := slackmodel.NewMessageFromData(ts, c.SlackChannelID, c.SlackThreadTS,
+				"T-EVAL", message.User, "", message.Text, ts, createdAt, nil)
+			if err := repo.CaseMessage().Put(ctx, wsID, created.ID, msg); err != nil {
+				return nil, goerr.Wrap(err, "seed case thread", goerr.V("title", cs.Title))
+			}
+		}
 		out = append(out, created)
 	}
 	return out, nil
+}
+
+// seededRetriever is the Slack message reader every agent in the scenario gets:
+// it returns the threads the scenario seeded (and nothing for any other thread),
+// and records the read. Without it a Job told to read its own thread sees an
+// empty one, and is judged on a case description alone.
+type seededRetriever struct {
+	rec   *toolsim.Recorder
+	slack *fakeSlack
+}
+
+func (s *seededRetriever) GetConversationReplies(ctx context.Context, channelID, threadTS string, limit int) ([]slacksvc.ConversationMessage, error) {
+	msgs, err := s.slack.GetConversationReplies(ctx, channelID, threadTS, limit)
+	s.rec.Record("slack_get_replies", "sim", map[string]any{"channel": channelID, "thread_ts": threadTS}, len(msgs))
+	return msgs, err
+}
+
+func (s *seededRetriever) GetConversationHistory(_ context.Context, channelID string, _ time.Time, _ int) ([]slacksvc.ConversationMessage, error) {
+	s.rec.Record("slack_get_history", "sim", map[string]any{"channel": channelID}, nil)
+	return nil, nil
+}
+
+// jobSims carries the same tool integrations used by the other eval drivers.
+type jobSims struct {
+	slack    *fakeSlack
+	notion   notiontool.Client
+	webfetch *webfetch.ClientConfig
+	clock    func() time.Time
+	// slackLimits bounds what a Slack read returns, as in a deployed run.
+	slackLimits slacktool.Limits
+	retriever   slacktool.MessageRetriever
+	slackSearch slacktool.SearchService
 }
 
 // buildJobRunner wires a JobRunner mirroring the production job runtime
@@ -487,6 +596,7 @@ func buildJobRunner(
 	uc *usecase.UseCases,
 	llm gollem.LLMClient,
 	durable *job.DurableRuntime,
+	sims jobSims,
 ) *job.JobRunner {
 	actionAdapter := usecase.NewActionToolAdapter(uc.Action)
 	stepAdapter := usecase.NewActionStepToolAdapter(uc.ActionStep)
@@ -529,6 +639,24 @@ func buildJobRunner(
 			Schema:      fieldSchema,
 			StatusSet:   caseStatusSet,
 		})...)
+		// Use the evaluation Slack facade for outbound messages and thread reads.
+		if c != nil && c.SlackChannelID != "" {
+			out = append(out, slackpost.New(slackpost.Deps{
+				Poster:          usecase.NewSlackPoster(sims.slack),
+				ChannelID:       c.SlackChannelID,
+				DefaultThreadTS: c.SlackThreadTS,
+			})...)
+		}
+		out = append(out, slacktool.NewReadOnly(slacktool.Deps{
+			Bot:       sims.slack,
+			Retriever: sims.retriever,
+			Search:    sims.slackSearch,
+			Limits:    sims.slackLimits,
+		})...)
+		out = append(out, notiontool.New(notiontool.Deps{Client: sims.notion})...)
+		if sims.webfetch != nil {
+			out = append(out, webfetch.New(webfetch.NewClient(*sims.webfetch))...)
+		}
 		if ws != nil && ws.MemoConfig.Enabled() {
 			out = append(out, memotool.New(memotool.Deps{
 				Repo:        repo,
@@ -557,7 +685,27 @@ func buildJobRunner(
 		ToolBuilder:     toolBuilder,
 		Durable:         durable,
 		WorkspaceAccess: uc.WorkspaceAccess,
+		Clock:           sims.clock,
 	})
+}
+
+// seedSlackUsers registers the scenario's Slack users, so a Job that assigns one
+// passes the existence check AssignCase applies.
+func seedSlackUsers(ctx context.Context, repo interfaces.Repository, sc *scenario.Scenario) error {
+	if len(sc.SlackUsers) == 0 {
+		return nil
+	}
+	now := time.Now().UTC()
+	users := make([]*model.SlackUser, 0, len(sc.SlackUsers))
+	for _, u := range sc.SlackUsers {
+		users = append(users, &model.SlackUser{
+			ID: model.SlackUserID(u.ID), Name: u.Name, RealName: u.Name, UpdatedAt: now,
+		})
+	}
+	if err := repo.SlackUser().SaveMany(ctx, users); err != nil {
+		return goerr.Wrap(err, "seed slack users")
+	}
+	return nil
 }
 
 // seedSources injects the scenario's workspace data sources into the memory

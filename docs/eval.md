@@ -56,6 +56,7 @@ recursively for `*.toml`).
 | `--dump-all` | Dump every scenario, not just those with failing checks. |
 | `--lang <en\|ja>` | Output language for judge reasons / `analysis.md` (default from `HECATONCHEIRES_DEFAULT_LANG`). Distinct from the agent's conversation language (`meta.language`). |
 | `--list-tools` | Print the tool catalog and exit. |
+| `--harness-dir <path>` | Publish requests for an external agent harness using a private local directory. |
 | `--global-config <path>` | Global config file(s) holding the `[[llm_model]]` definitions (and optionally `[agent] default_budget_usd`). Required to run scenarios. |
 
 LLM / Slack / GitHub / Notion credentials reuse the **same flags and
@@ -72,6 +73,97 @@ model, because each scenario brings its own workspace. A run's budget comes from
 
 Exit codes: `0` on completed runs (regardless of check verdicts), `2` on an
 execution error (parse failure, LLM/tool error, etc.).
+
+## Use an external agent harness
+
+Use the same scenarios to compare workspace prompts and settings across agent
+runtimes. Run the baseline and candidate configurations with the same fixtures
+and checks, keeping the reports from both runs. A scenario can supply workspace
+configuration, seeded cases, and contextual data for simulated tools.
+
+Start an evaluation with an unused, private session directory:
+
+```sh
+session_dir=$(mktemp -d)
+hecatoncheires eval --harness-dir "$session_dir" \
+  --global-config ./global.toml --llm-model main --concurrency 1 \
+  --report external-report.json ./scenarios
+```
+
+A worker in another terminal can drive the session through
+`hecatoncheires harness --dir "$session_dir"`, or connect directly as an MCP
+client over Streamable HTTP using the URL in `endpoint.json`. The URL contains
+the session's access token and stays on IPv4 loopback. Keep the directory
+private and use a separate one for each run.
+
+### Data flow
+
+```mermaid
+sequenceDiagram
+    participant Scenario as Scenario TOML
+    participant Eval as Hecatoncheires eval
+    participant MCP as Local MCP session
+    participant Worker as External harness
+    participant Tools as Scenario tools
+    participant Report as Eval report
+
+    Eval->>MCP: Start a session and publish endpoint.json
+    Scenario->>Eval: Load workspace settings, case history, and checks
+    Note over MCP,Worker: The worker connects directly over MCP or through the harness CLI
+    loop Each agent, judge, or simulator request
+        Eval->>MCP: Queue the prompt, role, and applicable schemas
+        Worker->>MCP: next_request and get_request
+        MCP-->>Worker: Request details and allowed tools
+        opt Tool call
+            Worker->>MCP: call_tool
+            MCP-->>Worker: Call ID
+            MCP->>Tools: Execute within the scenario scope
+            Note over MCP,Tools: A simulated tool can queue a separate tool-sim request
+            Tools-->>MCP: Tool result
+            Worker->>MCP: poll_tool with call ID
+            MCP-->>Worker: Tool result when ready
+        end
+        Worker->>MCP: submit_answer
+        MCP-->>Eval: Accepted answer
+    end
+    Eval->>Report: Record the outcome, tool calls, and verdicts
+```
+
+The original session design used the same pull-and-submit flow over a temporary
+loopback MCP endpoint. The initial runner was process-wide. The current runner
+is scoped to the evaluation context. MCP tool calls return a call ID immediately,
+so workers can handle a simulator request while a tool call is pending. Workers
+can recover the latest call ID with `get_request` after a connection interruption
+and poll the existing call.
+The private session directory is locked while the evaluation is running.
+
+### Drive the session
+
+1. Use `harness next` to take a request and `harness show <id>` to read its
+   instructions, role, available tools, and response schema. Use
+   `show --json <id>` from a script.
+2. Use `harness call --args-file - <id> <tool>` with a JSON object on stdin to
+   call a tool through the scenario. A simulated tool may enqueue a
+   separate `tool-sim` request. Use `call --async` and `poll` to let one worker
+   serve that request while the original call is pending, or reserve capacity
+   in a second worker (`next --role tool-sim`).
+3. Send the answer with `harness submit --file - <id>`. Follow the response
+   schema when one is supplied. Continue until `harness next` reports that the
+   session has finished.
+
+An adapter can run these commands for any external agent runtime. The worker
+receives separate requests for the system under test, the judge, and any tool
+or user simulators. Use `next --role` to send these roles to different workers.
+Keep each request's context separate when comparing
+configurations. Model definitions are still used to resolve workspace job
+references, while the worker chooses the actual model and its credentials.
+
+The external worker runs a whole agent turn. Hecatoncheires still applies its
+tool scope and validates the workflow result. For plan-and-execute workflows,
+this mode uses one externally driven agent in place of the planner, tasks, and
+replan loop. Use the default eval mode to measure that orchestration. The
+external mode uses the scenario's isolated repository, recorded Slack posts,
+and simulated service tools. It does not configure live integrations.
 
 ## Scenario schema
 
@@ -185,6 +277,33 @@ id       = "searched-for-context"
 question = "Did the agent call a search tool to gather context before materializing the case?"
 ```
 
+## Replay earlier case state
+
+Use `[[cases]]` to seed cases that already existed when the evaluated work
+started. In a Slack workspace, `[[cases.thread]]` adds earlier thread messages
+for a seeded case. Define users whose names should resolve in `[[slack_users]]`.
+For example:
+
+```toml
+[[slack_users]]
+id = "U0123456789"
+name = "Requester"
+
+[[cases]]
+title = "Portal login problem"
+reporter = "U0123456789"
+
+[[cases.thread]]
+user = "U0123456789"
+text = "I can open the portal on mobile, but the desktop browser returns an error."
+```
+
+Set `meta.now` to an RFC 3339 timestamp to replay the same workflow clock.
+For an initial thread workflow, put only the opening message in `input.text`.
+Put facts the requester may share in `persona.knowledge`. Use later outcomes
+to write checks and review results without putting them in the starting
+context.
+
 ## `job` workflow
 
 For evaluating a Job, the scenario:
@@ -218,6 +337,18 @@ question = "Did the job run complete successfully (outcome SUCCESS)?"
 id       = "created-followup-action"
 question = "Did the job create a follow-up action for the login failure?"
 ```
+
+To replay several Jobs against the same case, use `ids` in place of `id`
+in the `[run_job]` table. Jobs run in the listed order, sharing case
+state and recorded Slack messages. Diagnostic `run.json` records the simulated
+Slack posts in `posts`.
+
+```toml
+[run_job]
+ids = ["triage_summary", "follow_up"]
+target_case = "Cannot log in to the portal (503)"
+```
+
 
 The job runs through the real `JobRunner` with read-only + action-writer tools
 wired, so checks can assert on the run outcome, the resulting case, and any

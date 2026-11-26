@@ -8,8 +8,10 @@ package evaltype
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/gollem-dev/gollem"
 	"github.com/m-mizutani/hecatoncheires/pkg/domain/model"
@@ -103,6 +105,9 @@ type CaseArtifact struct {
 	Case       *model.Case
 	Transcript []TurnRecord
 	ToolCalls  []ToolCallRecord
+	// Posts are the Slack messages the turn produced (acknowledgement, progress,
+	// the creation notice), in order.
+	Posts []SlackPost
 }
 
 // Kind implements Artifact.
@@ -170,6 +175,7 @@ func (a *CaseArtifact) Render() string {
 		b.WriteString("\n# Tool calls\n(none)\n")
 	}
 
+	renderSlackPosts(&b, a.Posts)
 	return b.String()
 }
 
@@ -189,6 +195,47 @@ type JobArtifact struct {
 	Case      *model.Case
 	Actions   []*model.Action
 	ToolCalls []ToolCallRecord
+	// StartingDescription and StartingThread are the evidence seeded before the
+	// first Job. They let the judge check whether the result is grounded.
+	StartingDescription string
+	StartingThread      []string
+	// Posts are the Slack messages the run produced, in order: both the ones the
+	// Job's agent posted through a tool and the ones the use case posted on its
+	// own (e.g. the assign notice).
+	Posts []SlackPost
+}
+
+// SlackPost is one outbound Slack message recorded during a run.
+type SlackPost struct {
+	Kind      string `json:"kind"`
+	ChannelID string `json:"channel_id"`
+	ThreadTS  string `json:"thread_ts,omitempty"`
+	Text      string `json:"text"`
+	TS        string `json:"ts"`
+}
+
+func renderSlackPosts(b *strings.Builder, posts []SlackPost) {
+	chars, mentions := 0, 0
+	for _, p := range posts {
+		chars += utf8.RuneCountInString(p.Text)
+		mentions += len(slackMentions(p.Text))
+	}
+	fmt.Fprintf(b, "\n# Slack posts (posts=%d chars=%d mentions=%d)\n", len(posts), chars, mentions)
+	if len(posts) == 0 {
+		b.WriteString("(none)\n")
+	}
+	for i, p := range posts {
+		fmt.Fprintf(b, "## Post %d [%s] channel=%s thread_ts=%s mentions=%v\n%s\n", i+1, p.Kind, p.ChannelID, p.ThreadTS, slackMentions(p.Text), p.Text)
+	}
+}
+
+// slackMentionPattern matches the Slack syntaxes that notify someone: a user,
+// a user group, or a channel-wide broadcast.
+var slackMentionPattern = regexp.MustCompile(`<@[UW][A-Z0-9]+(\|[^>]*)?>|<!subteam\^[A-Z0-9]+(\|[^>]*)?>|<!(here|channel|everyone)>`)
+
+// slackMentions returns the notifying mentions found in text.
+func slackMentions(text string) []string {
+	return slackMentionPattern.FindAllString(text, -1)
 }
 
 // Kind implements Artifact.
@@ -204,6 +251,16 @@ func (a *JobArtifact) Render() string {
 	}
 	if a.Outcome.Summary != "" {
 		fmt.Fprintf(&b, "- Summary: %s\n", a.Outcome.Summary)
+	}
+
+	if a.StartingDescription != "" || len(a.StartingThread) > 0 {
+		b.WriteString("\n# Case before run\n")
+		if a.StartingDescription != "" {
+			fmt.Fprintf(&b, "- Description: %s\n", a.StartingDescription)
+		}
+		for _, message := range a.StartingThread {
+			fmt.Fprintf(&b, "- Thread message: %s\n", message)
+		}
 	}
 
 	b.WriteString("\n# Case after run\n")
@@ -225,6 +282,12 @@ func (a *JobArtifact) Render() string {
 			}
 		}
 	}
+
+	if a.Case != nil {
+		fmt.Fprintf(&b, "- Assignees: %s\n", strings.Join(a.Case.AssigneeIDs, ", "))
+	}
+
+	renderSlackPosts(&b, a.Posts)
 
 	b.WriteString("\n# Actions\n")
 	if len(a.Actions) == 0 {

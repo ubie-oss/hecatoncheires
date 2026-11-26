@@ -12,9 +12,11 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/m-mizutani/goerr/v2"
 	"github.com/m-mizutani/hecatoncheires/pkg/cli/config"
+	"github.com/m-mizutani/hecatoncheires/pkg/domain/model"
 	"github.com/m-mizutani/hecatoncheires/pkg/i18n"
 	"github.com/pelletier/go-toml/v2"
 )
@@ -22,12 +24,14 @@ import (
 // Scenario is one eval case. The TOML-decoded eval tables plus the workspace
 // configuration extracted from the same file.
 type Scenario struct {
-	Meta    Meta            `toml:"meta"`
-	Input   Input           `toml:"input"`
-	Cases   []CaseSeed      `toml:"cases"`
-	Sources []Source        `toml:"sources"`
-	Tools   map[string]Tool `toml:"tools"`
-	Persona Persona         `toml:"persona"`
+	Meta  Meta       `toml:"meta"`
+	Input Input      `toml:"input"`
+	Cases []CaseSeed `toml:"cases"`
+	// SlackUsers seeds the workspace's known Slack users.
+	SlackUsers []SlackUserSeed `toml:"slack_users"`
+	Sources    []Source        `toml:"sources"`
+	Tools      map[string]Tool `toml:"tools"`
+	Persona    Persona         `toml:"persona"`
 	// Job (table key `run_job`) selects which workspace Job to run for the
 	// job workflow. The key is `run_job`, not `job`, to avoid
 	// colliding with the workspace config's `[[job]]` array in the same file.
@@ -49,6 +53,20 @@ type Meta struct {
 	// Language is the i18n language the system-under-test agent responds in
 	// (the simulated end-user's locale). Distinct from the eval output language.
 	Language string `toml:"language"`
+	// Now pins the clock used by the evaluated agent (RFC 3339).
+	Now string `toml:"now"`
+}
+
+// Clock returns the pinned clock, or nil when the scenario does not pin one.
+func (m Meta) Clock() (func() time.Time, error) {
+	if strings.TrimSpace(m.Now) == "" {
+		return nil, nil
+	}
+	t, err := time.Parse(time.RFC3339, strings.TrimSpace(m.Now))
+	if err != nil {
+		return nil, goerr.Wrap(err, "meta.now must be RFC 3339", goerr.V("now", m.Now))
+	}
+	return func() time.Time { return t.UTC() }, nil
 }
 
 // Input is the triggering input. For thread_mode_initial it is the first
@@ -60,13 +78,31 @@ type Input struct {
 	Reporter string `toml:"reporter"`
 }
 
-// CaseSeed is a pre-existing case injected into the memory repository before
-// the run (for future search/context use; optional).
+// CaseSeed is a pre-existing case injected into the memory repository before the run.
 type CaseSeed struct {
 	Title       string         `toml:"title"`
 	Description string         `toml:"description"`
 	BoardStatus string         `toml:"board_status"`
 	Fields      map[string]any `toml:"fields"`
+	// Reporter pins the case reporter (a Slack user id). Empty uses the seed id.
+	Reporter string `toml:"reporter"`
+	// Thread is the Slack thread the case is bound to, as slack__get_messages
+	// returns it. The first entry is the root post. Include only messages known
+	// when the Job would have started.
+	Thread []ThreadMessage `toml:"thread"`
+}
+
+// ThreadMessage is one seeded message of a case's Slack thread.
+type ThreadMessage struct {
+	User string `toml:"user"`
+	Text string `toml:"text"`
+}
+
+// SlackUserSeed is a Slack user known to the workspace, so that assigning it
+// passes the existence check the production use case applies.
+type SlackUserSeed struct {
+	ID   string `toml:"id"`
+	Name string `toml:"name"`
 }
 
 // Source is a workspace data source seeded into the memory repository before
@@ -147,8 +183,18 @@ type Persona struct {
 // workspace config ([[job]]); the target case must be one of the seeded
 // [[cases]] (matched by title, or the first when TargetCase is empty).
 type JobSpec struct {
-	ID         string `toml:"id"`
-	TargetCase string `toml:"target_case"`
+	ID string `toml:"id"`
+	// IDs runs several Jobs in order against the same case. Set either ID or IDs.
+	IDs        []string `toml:"ids"`
+	TargetCase string   `toml:"target_case"`
+}
+
+// SelectedIDs returns the Job IDs in replay order.
+func (j JobSpec) SelectedIDs() []string {
+	if len(j.IDs) > 0 {
+		return j.IDs
+	}
+	return []string{j.ID}
 }
 
 // WorkflowJob is the workflow kind that runs a Job against a case.
@@ -269,6 +315,10 @@ func (sc *Scenario) Validate(opts ValidateOptions) error {
 		}
 	}
 
+	if _, err := sc.Meta.Clock(); err != nil {
+		return err
+	}
+
 	// input.text drives the message-triggered workflows (e.g. thread_mode_initial).
 	// The job workflow has no triggering post — its input is the seeded
 	// target case plus the selected job — so input.text is not required there.
@@ -311,8 +361,21 @@ func (sc *Scenario) Validate(opts ValidateOptions) error {
 	}
 
 	if sc.Meta.Workflow == WorkflowJob {
-		if sc.Job == nil || strings.TrimSpace(sc.Job.ID) == "" {
-			return goerr.New("job workflow requires [job] with id", goerr.V("scenario_id", sc.Meta.ID))
+		if sc.Job == nil || (sc.Job.ID == "" && len(sc.Job.IDs) == 0) {
+			return goerr.New("job workflow requires [run_job] with id or ids", goerr.V("scenario_id", sc.Meta.ID))
+		}
+		if sc.Job.ID != "" && len(sc.Job.IDs) > 0 {
+			return goerr.New("run_job.id and run_job.ids are mutually exclusive", goerr.V("scenario_id", sc.Meta.ID))
+		}
+		seenJobs := make(map[string]bool)
+		for _, id := range sc.Job.SelectedIDs() {
+			if strings.TrimSpace(id) == "" || seenJobs[id] {
+				return goerr.New("run_job must use nonempty, unique job IDs", goerr.V("scenario_id", sc.Meta.ID), goerr.V("job_id", id))
+			}
+			if sc.Workspace != nil && !slices.ContainsFunc(sc.Workspace.Jobs, func(j *model.Job) bool { return j.ID == id }) {
+				return goerr.New("job workflow: job id not found in workspace", goerr.V("scenario_id", sc.Meta.ID), goerr.V("job_id", id))
+			}
+			seenJobs[id] = true
 		}
 		if len(sc.Cases) == 0 {
 			return goerr.New("job workflow requires at least one [[cases]] (the target case)", goerr.V("scenario_id", sc.Meta.ID))

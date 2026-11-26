@@ -147,6 +147,13 @@ exempt_name := {
 }
 
 is_exempt if {
+	# The Job builder only constructs tool instances from supplied dependencies.
+	input.Node.Name.Name == "CoreTools"
+	input.FileName == "runner.go"
+	endswith(input.DirName, "pkg/usecase/job")
+}
+
+is_exempt if {
 	some p in exempt_prefix
 	startswith(input.Node.Name.Name, p)
 }

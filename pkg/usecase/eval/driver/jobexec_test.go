@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/gollem-dev/gollem"
 	"github.com/gollem-dev/gollem/mock"
@@ -28,7 +29,7 @@ func actionCreatingJobLLM(actionTitle, summary string) *mock.LLMClientMock {
 		NewSessionFunc: func(_ context.Context, _ ...gollem.SessionOption) (gollem.Session, error) {
 			return &mock.SessionMock{
 				GenerateFunc: func(_ context.Context, _ []gollem.Input, _ ...gollem.GenerateOption) (*gollem.Response, error) {
-					if calls.Add(1) == 1 {
+					if calls.Add(1)%2 == 1 {
 						return &gollem.Response{FunctionCalls: []*gollem.FunctionCall{{
 							ID:        "c1",
 							Name:      "core__create_action",
@@ -87,6 +88,29 @@ func TestJobExecution_RunsJobAndCreatesAction(t *testing.T) {
 	gt.String(t, render).Contains("Investigate portal 503 login")
 }
 
+func TestJobExecution_SeedsEarlierMessagesForJobPrompts(t *testing.T) {
+	ctx := t.Context()
+	sc := loadJobScenario(t)
+	sc.Workspace.SlackMonitorChannel = "C0123456789"
+	sc.Cases[0].Thread = []scenario.ThreadMessage{
+		{User: "U0123456789", Text: "The mobile portal still works."},
+		{User: "U0123456790", Text: "The desktop portal returns HTTP 503."},
+	}
+	e, err := env.Build(ctx, sc, env.Options{
+		LLM:       actionCreatingJobLLM("Investigate", "Action created."),
+		Models:    testModelPolicy(t),
+		Completer: fakeCompleter{},
+	})
+	gt.NoError(t, err).Required()
+	t.Cleanup(e.Stop)
+
+	messages, _, err := e.Repo.CaseMessage().List(ctx, e.Entry.Workspace.ID, e.SeededCases[0].ID, 10, "")
+	gt.NoError(t, err).Required()
+	gt.A(t, messages).Length(2).Required()
+	gt.V(t, messages[0].Text()).Equal("The desktop portal returns HTTP 503.")
+	gt.V(t, messages[1].Text()).Equal("The mobile portal still works.")
+}
+
 func TestJobExecution_UnknownJob(t *testing.T) {
 	sc := loadJobScenario(t)
 	sc.Job.ID = "no-such-job"
@@ -100,4 +124,39 @@ func TestJobExecution_UnknownJob(t *testing.T) {
 
 	_, err = driver.NewJobExecution().Run(context.Background(), e, sc, &recordingSim{})
 	gt.Error(t, err)
+}
+
+func TestJobExecution_RunsSelectedJobsInOrderOnOneCase(t *testing.T) {
+	ctx := context.Background()
+	sc := loadJobScenario(t)
+	followup := *sc.Workspace.Jobs[0]
+	followup.ID = "followup"
+	sc.Workspace.Jobs = append(sc.Workspace.Jobs, &followup)
+	sc.Job.ID = ""
+	sc.Job.IDs = []string{"followup", "triage_summary"}
+	sc.Meta.Now = "2026-04-11T09:30:00+09:00"
+
+	e, err := env.Build(ctx, sc, env.Options{
+		LLM:       actionCreatingJobLLM("Investigate", "Action created."),
+		Models:    testModelPolicy(t),
+		Completer: fakeCompleter{},
+	})
+	gt.NoError(t, err).Required()
+	t.Cleanup(e.Stop)
+
+	art, err := driver.NewJobExecution().Run(ctx, e, sc, &recordingSim{})
+	gt.NoError(t, err).Required()
+
+	ja := art.(*evaltype.JobArtifact)
+	gt.V(t, ja.JobID).Equal("followup+triage_summary")
+	gt.V(t, ja.Outcome.Stage).Equal("[followup] SUCCESS\n[triage_summary] SUCCESS")
+	gt.A(t, ja.Actions).Length(2).Required()
+	for _, action := range ja.Actions {
+		gt.V(t, action.CaseID).Equal(ja.Case.ID)
+	}
+	gt.A(t, ja.ToolCalls).Length(2).Required()
+	gt.V(t, ja.ToolCalls[0].Mode).Equal("followup")
+	gt.V(t, ja.ToolCalls[1].Mode).Equal("triage_summary")
+	gt.V(t, ja.ToolCalls[1].Seq).Equal(2)
+	gt.V(t, e.Now()).Equal(time.Date(2026, 4, 11, 0, 30, 0, 0, time.UTC))
 }

@@ -7,6 +7,8 @@ import (
 
 	"github.com/gollem-dev/gollem"
 	"github.com/m-mizutani/goerr/v2"
+
+	"github.com/m-mizutani/hecatoncheires/pkg/agent/harness"
 	"github.com/urfave/cli/v3"
 
 	agentkernel "github.com/m-mizutani/hecatoncheires/pkg/agent/kernel"
@@ -82,7 +84,7 @@ func buildLLMSetup(ctx context.Context, c *cli.Command, appCfg *config.AppConfig
 	slices.Sort(refs)
 	refs = slices.Compact(refs)
 
-	setup, err := newLLMSetup(ctx, llmCfg, defs, refs, agentSection, resolveBudget)
+	setup, err := newLLMSetup(ctx, llmCfg.ModelRef(), llmCfg.NewClientFor, defs, refs, agentSection, resolveBudget)
 	if err != nil {
 		return llmSetup{}, err
 	}
@@ -95,7 +97,7 @@ func buildLLMSetup(ctx context.Context, c *cli.Command, appCfg *config.AppConfig
 // registry names), and it carries no --agent-* flags, so the budget comes from
 // the [agent] section or the harness's own default.
 func buildEvalLLMSetup(ctx context.Context, c *cli.Command, appCfg *config.AppConfig,
-	llmCfg *config.LLM,
+	llmCfg *config.LLM, external bool,
 ) (llmSetup, error) {
 	defs, err := appCfg.ConfigureLLMModels(c)
 	if err != nil {
@@ -114,7 +116,13 @@ func buildEvalLLMSetup(ctx context.Context, c *cli.Command, appCfg *config.AppCo
 		refs = append(refs, d.Ref)
 	}
 
-	return newLLMSetup(ctx, llmCfg, defs, refs, agentSection,
+	client := llmCfg.NewClientFor
+	if external {
+		client = func(_ context.Context, def agentkernel.ModelDef) (gollem.LLMClient, error) {
+			return harness.RefusingLLM{ModelName: def.Model}, nil
+		}
+	}
+	return newLLMSetup(ctx, llmCfg.ModelRef(), client, defs, refs, agentSection,
 		func(sec *config.AgentSection) (pricing.NanoUSD, string, error) {
 			if fromDoc := sec.DefaultBudget(); fromDoc > 0 {
 				return fromDoc, config.BudgetSourceGlobalConfig, nil
@@ -125,7 +133,8 @@ func buildEvalLLMSetup(ctx context.Context, c *cli.Command, appCfg *config.AppCo
 
 // newLLMSetup builds one client per reference name in refs and assembles the
 // policy. refs must contain the default reference name.
-func newLLMSetup(ctx context.Context, llmCfg *config.LLM, defs []agentkernel.ModelDef,
+func newLLMSetup(ctx context.Context, defaultRef string,
+	newClient func(context.Context, agentkernel.ModelDef) (gollem.LLMClient, error), defs []agentkernel.ModelDef,
 	refs []string, agentSection *config.AgentSection, resolveBudget budgetResolver,
 ) (llmSetup, error) {
 	byRef := make(map[string]agentkernel.ModelDef, len(defs))
@@ -133,7 +142,6 @@ func newLLMSetup(ctx context.Context, llmCfg *config.LLM, defs []agentkernel.Mod
 		byRef[d.Ref] = d
 	}
 
-	defaultRef := llmCfg.ModelRef()
 	defaultDef, ok := byRef[defaultRef]
 	if !ok {
 		known := make([]string, 0, len(byRef))
@@ -151,7 +159,7 @@ func newLLMSetup(ctx context.Context, llmCfg *config.LLM, defs []agentkernel.Mod
 		return llmSetup{}, goerr.Wrap(err, "resolve the default agent budget")
 	}
 
-	defaultClient, err := llmCfg.NewClientFor(ctx, defaultDef)
+	defaultClient, err := newClient(ctx, defaultDef)
 	if err != nil {
 		return llmSetup{}, goerr.Wrap(err, "build the default model client")
 	}
@@ -169,7 +177,7 @@ func newLLMSetup(ctx context.Context, llmCfg *config.LLM, defs []agentkernel.Mod
 				"a model reference name is not defined",
 				goerr.V("llm_model", ref))
 		}
-		client, err := llmCfg.NewClientFor(ctx, def)
+		client, err := newClient(ctx, def)
 		if err != nil {
 			return llmSetup{}, goerr.Wrap(err, "build a model client",
 				goerr.V("llm_model", ref))

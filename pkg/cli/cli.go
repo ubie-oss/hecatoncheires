@@ -20,13 +20,25 @@ func Run(ctx context.Context, args []string, version string) error {
 		Version: version,
 		Flags:   loggerCfg.Flags(),
 		Before: func(ctx context.Context, c *cli.Command) (context.Context, error) {
+			harnessCommand := c.Args().First() == harnessCommandName
+			output := c.String("log-output")
+			if harnessCommand && (output == "stdout" || output == "-") {
+				// The worker reads machine output from stdout. Keep transport
+				// diagnostics, including connection cleanup errors, separate.
+				if err := c.Set("log-output", "stderr"); err != nil {
+					return ctx, goerr.Wrap(err, "route harness logs to stderr")
+				}
+			}
 			f, err := loggerCfg.Configure()
 			if err != nil {
 				return ctx, err
 			}
 			closer = f
 
-			logging.Default().Info("Starting hecatoncheires", "logger", loggerCfg)
+			// The harness commands print what an agent asked for and nothing else.
+			if !harnessCommand {
+				logging.Default().Info("Starting hecatoncheires", "logger", loggerCfg)
+			}
 			return ctx, nil
 		},
 		After: func(ctx context.Context, c *cli.Command) error {
@@ -43,6 +55,7 @@ func Run(ctx context.Context, args []string, version string) error {
 			cmdDiagnosis(),
 			cmdTick(),
 			cmdEval(),
+			cmdHarness(),
 			cmdExport(),
 		},
 	}

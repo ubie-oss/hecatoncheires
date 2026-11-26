@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/m-mizutani/goerr/v2"
 
+	"github.com/m-mizutani/hecatoncheires/pkg/agent/harness"
 	agentkernel "github.com/m-mizutani/hecatoncheires/pkg/agent/kernel"
 	githubtool "github.com/m-mizutani/hecatoncheires/pkg/agent/tool/github"
 	notiontool "github.com/m-mizutani/hecatoncheires/pkg/agent/tool/notion"
@@ -78,6 +79,8 @@ func toolNames() []string {
 type Config struct {
 	// LLM is shared by all roles (agent, judge, simulators) — FR-7.
 	LLM gollem.LLMClient
+	// Harness delegates agent runs and evaluator completions to an external worker.
+	Harness harness.Runner
 	// Models is which model each agent run generates through and what it may
 	// spend. Required alongside LLM: a scenario Job that names a model resolves
 	// it through this, exactly as a deployed one does.
@@ -213,10 +216,19 @@ func runOne(ctx context.Context, sc *scenario.Scenario, registry *driver.Registr
 	}
 
 	completer := llmrun.New(cfg.LLM)
+	forRole := func(role string) evaltype.Completer {
+		if cfg.Harness != nil {
+			return harness.Completer{Runner: cfg.Harness, Role: role}
+		}
+		return completer
+	}
+	if cfg.Harness != nil {
+		ctx = harness.WithRunner(ctx, cfg.Harness)
+	}
 	e, err := env.Build(ctx, sc, env.Options{
 		LLM:             cfg.LLM,
 		Models:          cfg.Models,
-		Completer:       completer,
+		Completer:       forRole(harness.RoleToolSim),
 		LiveSlackSearch: cfg.LiveSlackSearch,
 		LiveNotion:      cfg.LiveNotion,
 		GitHub:          cfg.GitHub,
@@ -235,14 +247,14 @@ func runOne(ctx context.Context, sc *scenario.Scenario, registry *driver.Registr
 		return errorResult(res, goerr.New("no driver for workflow", goerr.V("workflow", sc.Meta.Workflow)))
 	}
 
-	sim := usersim.New(completer, sc.Persona, sc.Meta.Language)
+	sim := usersim.New(forRole(harness.RoleUserSim), sc.Persona, sc.Meta.Language)
 	logger.Info("eval scenario starting", "scenario", sc.Meta.ID, "eval_id", evalID)
 	art, err := d.Run(ctx, e, sc, sim)
 	if err != nil {
 		return errorResult(res, goerr.Wrap(err, "run workflow"))
 	}
 
-	j := judge.New(completer, cfg.Language)
+	j := judge.New(forRole(harness.RoleJudge), cfg.Language)
 	verdicts, err := j.Evaluate(ctx, art, sc.Expect.Checks)
 	if err != nil {
 		return errorResult(res, goerr.Wrap(err, "judge"))
