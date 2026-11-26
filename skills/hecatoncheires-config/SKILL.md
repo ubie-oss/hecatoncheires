@@ -105,6 +105,11 @@ workflow, so converge on intent first, then write, then prove it loads.
    truth; a manual rule walkthrough is only a last resort, and say so plainly
    when that is all you could do.
 
+To check how a Job or prompt change behaves on past cases, use the
+[`hecatoncheires-build-scenario` skill](https://github.com/ubie-oss/hecatoncheires/blob/main/skills/hecatoncheires-build-scenario/SKILL.md)
+to compare the current and candidate configurations with the same scenarios
+and checks.
+
 ## Principles that outlast the schema
 
 These hold regardless of which keys the current docs define:
